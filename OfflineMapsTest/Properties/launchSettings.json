@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "OfflineMapsTest (Package)": {
+      "commandName": "MsixPackage"
+    },
+    "OfflineMapsTest (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}
