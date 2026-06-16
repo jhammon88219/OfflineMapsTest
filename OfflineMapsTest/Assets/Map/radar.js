@@ -17,11 +17,52 @@
     // an empty (no-echo) frame. currentFrame is the index being rendered.
     let frames = [];
     let currentFrame = -1;
+    let pendingFrame = -1;  // a frame requested via showFrame before it finished decoding; the
+                            // decode that satisfies it promotes it to currentFrame (so showFrame
+                            // never pins currentFrame to an undecoded index and blanks the layer).
     let uploadedFrame = -1; // which frame's geometry is currently in the GL buffers
     let siteLat = 0, siteLon = 0;
     let opacity = 0.85;
     let loopToken = 0;      // bumped per loop so stale async frames are dropped
     let currentMap = null;
+
+    // Render-path diagnostics: render() runs every frame, so rate-limit its logging. We track
+    // the running error/blank counts and only emit on the first occurrence + periodically, plus
+    // a one-shot "recovered" line, so the debug log shows WHEN tiles blanked without flooding.
+    let renderErrCount = 0, lastRenderErrAt = 0, lastRenderErr = '';
+    let blankCount = 0, lastBlankAt = 0, lastBlankReason = '';
+    let drewSinceIssue = false;
+    function noteRenderIssue(reason, isError) {
+        const now = Date.now();
+        if (isError) { renderErrCount++; lastRenderErr = reason; }
+        else { blankCount++; lastBlankReason = reason; }
+        const last = isError ? lastRenderErrAt : lastBlankAt;
+        if (last === 0 || now - last > 3000) {
+            if (isError) lastRenderErrAt = now; else lastBlankAt = now;
+            hostLog((isError ? 'RENDER ERROR' : 'RENDER BLANK') + ' cf=' + currentFrame +
+                ' (errs=' + renderErrCount + ' blanks=' + blankCount + '): ' + reason);
+        }
+        drewSinceIssue = false;
+    }
+    function noteRenderOk() {
+        if (!drewSinceIssue && (renderErrCount > 0 || blankCount > 0)) {
+            drewSinceIssue = true;
+            hostLog('render recovered cf=' + currentFrame);
+        }
+    }
+
+    // WebGL context loss is permanent unless restored — a prime suspect for "tiles vanish and
+    // never come back" under the heavy per-frame geometry. Log both edges once.
+    let ctxListenersAttached = false;
+    function attachContextListeners(map) {
+        if (ctxListenersAttached || !map || !map.getCanvas) return;
+        try {
+            const c = map.getCanvas();
+            c.addEventListener('webglcontextlost', function () { hostLog('WEBGL CONTEXT LOST'); }, false);
+            c.addEventListener('webglcontextrestored', function () { hostLog('WEBGL CONTEXT RESTORED'); }, false);
+            ctxListenersAttached = true;
+        } catch (e) { hostLog('ctx listener attach failed: ' + (e && e.message ? e.message : e)); }
+    }
 
     // GL objects (recreated in onAdd; null when the layer isn't attached).
     let program = null, posBuf = null, colorBuf = null;
@@ -71,12 +112,32 @@
         frames[res.index] = res.empty
             ? { count: 0 }
             : { positions: res.positions, colors: res.colors, count: res.count };
+        const ms = function (v) { return v == null ? '?' : v; };
+        hostLog('decoded idx=' + res.index + ' ' + (res.empty ? 'EMPTY' : 'tris=' + res.count) +
+            ' dec=' + ms(res.decodeMs) + 'ms bld=' + ms(res.buildMs) + 'ms rad=' + ms(res.radials) +
+            ' kb=' + (res.bytes == null ? '?' : Math.round(res.bytes / 1024)) +
+            ' decoded=' + frames.filter(Boolean).length + '/' + frames.length + ' cf=' + currentFrame);
 
-        // Show the first frame that arrives (the host pushes newest first).
-        if (currentFrame < 0 && currentMap) {
-            currentFrame = res.index;
-            uploadedFrame = -1;
-            addLayer(currentMap);
+        // Decide what to show now that this frame is available. Crucially, ANY of these paths
+        // re-adds the layer if it's missing (e.g. after a reload removed it) — so the radar can
+        // never get stuck blank with a decoded current frame.
+        if (currentMap) {
+            if (res.index === pendingFrame) {
+                // A showFrame() requested this index before it had decoded — promote it now.
+                pendingFrame = -1;
+                currentFrame = res.index;
+                uploadedFrame = -1;
+                showCurrent(currentMap, 'pending');
+            } else if (currentFrame < 0) {
+                // Nothing shown yet — adopt the first frame to arrive (host pushes newest first).
+                currentFrame = res.index;
+                uploadedFrame = -1;
+                showCurrent(currentMap, 'first');
+            } else if (res.index === currentFrame) {
+                // The on-screen frame was re-decoded (live in-place update) — repaint / re-add.
+                uploadedFrame = -1;
+                showCurrent(currentMap, 're-add');
+            }
         }
         post({ type: 'radarFrameReady', index: res.index, hasData: !res.empty });
     }
@@ -126,7 +187,7 @@
             render: function (glc, args) {
                 if (!program || currentFrame < 0) return;
                 const f = frames[currentFrame];
-                if (!f) return;
+                if (!f) { noteRenderIssue('no frame at cf=' + currentFrame, false); return; }
                 try {
                     // Upload this frame's geometry only when the current frame changed.
                     if (uploadedFrame !== currentFrame) {
@@ -157,8 +218,9 @@
                     glc.disableVertexAttribArray(aPos);
                     glc.disableVertexAttribArray(aColor);
                     glc.bindBuffer(glc.ARRAY_BUFFER, null);
+                    noteRenderOk();
                 } catch (e) {
-                    hostLog('render error: ' + (e && e.message ? e.message : e));
+                    noteRenderIssue((e && e.message ? e.message : String(e)), true);
                 }
             },
             onRemove: function (map, glc) {
@@ -180,13 +242,25 @@
         return sym ? sym.id : undefined;
     }
     function removeLayer(map) {
-        if (map.getLayer(LAYER_ID)) map.removeLayer(LAYER_ID);
+        if (map.getLayer(LAYER_ID)) { map.removeLayer(LAYER_ID); hostLog('layer removed'); }
     }
     function addLayer(map) {
         if (currentFrame < 0) return;
         removeLayer(map);
         uploadedFrame = -1;
         map.addLayer(makeCustomLayer(), beforeId(map));
+        hostLog('layer added before=' + beforeId(map) + ' cf=' + currentFrame);
+    }
+    // Ensures the current frame is on screen: repaint if the layer is up, else (re)add it.
+    // This is the single place that guarantees a decoded current frame is never left blank.
+    function showCurrent(map, reason) {
+        if (currentFrame < 0 || !frames[currentFrame]) return;
+        if (map.getLayer(LAYER_ID)) {
+            map.triggerRepaint();
+        } else {
+            hostLog('showCurrent(' + reason + ') idx=' + currentFrame + ' -> re-add layer');
+            addLayer(map);
+        }
     }
 
     // Decodes one volume into frames[index] (off-thread, with a main-thread fallback).
@@ -208,6 +282,7 @@
                         token: myToken, index: index, empty: !r2.geom,
                         positions: r2.geom && r2.geom.positions, colors: r2.geom && r2.geom.colors,
                         count: r2.geom && r2.geom.count,
+                        decodeMs: r2.decodeMs, buildMs: r2.buildMs, radials: r2.radials, gates: r2.gates, bytes: r2.bytes,
                     });
                 }).catch(function (err) {
                     applyFrameResult({ token: myToken, index: index, error: String(err && err.message ? err.message : err) });
@@ -222,31 +297,43 @@
     window.RadarLayer = {
         beginLoop: function (map, lat, lon) {
             currentMap = map;
+            attachContextListeners(map);
             siteLat = lat; siteLon = lon;
             loopToken++;            // invalidate any in-flight frames from a previous loop
             frames = [];
             currentFrame = -1;
+            pendingFrame = -1;
             uploadedFrame = -1;
+            renderErrCount = blankCount = 0; lastRenderErrAt = lastBlankAt = 0;
             removeLayer(map);
+            hostLog('beginLoop token=' + loopToken + ' @ ' + lat.toFixed(3) + ',' + lon.toFixed(3));
         },
         addFrame: function (map, url, index) {
             currentMap = map;
+            hostLog('addFrame idx=' + index);
             decodeFrame(url, index);
         },
         showFrame: function (map, index) {
             currentMap = map;
-            if (index === currentFrame) return;
-            currentFrame = index;
             if (frames[index]) {
-                if (map.getLayer(LAYER_ID)) map.triggerRepaint();
-                else addLayer(map);
+                // Decoded: switch to it now (and (re)add the layer if needed).
+                pendingFrame = -1;
+                if (index !== currentFrame) { currentFrame = index; uploadedFrame = -1; }
+                showCurrent(map, 'showFrame');
+            } else {
+                // Not decoded yet: remember the intent but keep the current frame on screen, so
+                // we don't blank the layer. applyFrameResult promotes it once it decodes.
+                pendingFrame = index;
+                hostLog('showFrame idx=' + index + ' pending (not decoded; keeping cf=' + currentFrame + ')');
             }
         },
         clear: function (map) {
             loopToken++;
             frames = [];
             currentFrame = -1;
+            pendingFrame = -1;
             removeLayer(map);
+            hostLog('clear token=' + loopToken);
         },
         setOpacity: function (map, op) {
             opacity = op;

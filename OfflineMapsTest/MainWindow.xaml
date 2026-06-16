@@ -25,38 +25,44 @@
                 Visibility="{x:Bind VisibleWhen(ViewModel.IsRibbonExpanded), Mode=OneWay}">
             <StackPanel Spacing="6">
 
-                <!-- Radar loop controls: play/pause + frame scrubber + frame time. Shown
-                     only when a radar site is selected; enabled once all frames load. -->
-                <Grid ColumnSpacing="8"
-                      Visibility="{x:Bind VisibleWhen(ViewModel.HasRadarLoop), Mode=OneWay}">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="Auto"/>
-                    </Grid.ColumnDefinitions>
-                    <Button Grid.Column="0"
-                            Padding="10,6"
+                <!-- Radar loop controls: play/pause + frame scrubber + frame time, centered as a
+                     fixed-width group. Shown only when a radar site is selected; enabled once all
+                     frames load. -->
+                <StackPanel Orientation="Horizontal"
+                            HorizontalAlignment="Center"
+                            Spacing="8"
+                            Visibility="{x:Bind VisibleWhen(ViewModel.HasRadarLoop), Mode=OneWay}">
+                    <Button Padding="10,6"
+                            VerticalAlignment="Center"
                             ToolTipService.ToolTip="Play / pause loop"
                             IsEnabled="{x:Bind ViewModel.IsLoopReady, Mode=OneWay}"
                             Click="OnTogglePlayClick">
                         <FontIcon Glyph="{x:Bind ViewModel.PlayPauseGlyph, Mode=OneWay}" FontSize="14"/>
                     </Button>
-                    <Slider Grid.Column="1"
+                    <Slider Width="360"
                             VerticalAlignment="Center"
                             Minimum="0"
                             Maximum="{x:Bind ViewModel.MaxFrameIndex, Mode=OneWay}"
                             StepFrequency="1"
                             IsEnabled="{x:Bind ViewModel.IsLoopReady, Mode=OneWay}"
                             Value="{x:Bind ViewModel.CurrentFrameIndex, Mode=TwoWay}"/>
-                    <TextBlock Grid.Column="2"
-                               VerticalAlignment="Center"
+                    <TextBlock VerticalAlignment="Center"
                                MinWidth="110"
                                TextAlignment="Right"
                                Text="{x:Bind ViewModel.CurrentFrameTimeText, Mode=OneWay}"/>
-                </Grid>
+                </StackPanel>
+
+                <!-- Authoritative issued/valid times for the loaded outlook (from its
+                     GeoJSON). Hidden when no outlook / no times are available. -->
+                <TextBlock Text="{x:Bind ViewModel.OutlookTimesText, Mode=OneWay}"
+                           Visibility="{x:Bind VisibleWhen(ViewModel.HasOutlookTimes), Mode=OneWay}"
+                           Opacity="0.8"
+                           FontSize="12"
+                           Margin="2,0,0,2"/>
 
                 <Grid ColumnSpacing="12">
                 <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
@@ -79,11 +85,12 @@
 
                 <!-- SPC outlook day selector. -->
                 <ComboBox Grid.Column="1"
-                          MinWidth="70"
+                          MinWidth="140"
                           VerticalAlignment="Bottom"
                           Header="Day"
                           ItemsSource="{x:Bind ViewModel.Days}"
-                          SelectedItem="{x:Bind ViewModel.SelectedDay, Mode=TwoWay}"/>
+                          SelectedItem="{x:Bind ViewModel.SelectedDayOption, Mode=TwoWay}"
+                          DisplayMemberPath="Label"/>
 
                 <!-- SPC outlook product — items cascade to the selected day; the
                      leading "None" entry clears the overlay. -->
@@ -116,8 +123,16 @@
                           SelectedItem="{x:Bind ViewModel.SelectedStyle, Mode=TwoWay}"
                           DisplayMemberPath="DisplayName"/>
 
+                <!-- Show/hide all radar site marker buttons. Independent of the radar layer. -->
+                <Button Grid.Column="5"
+                        VerticalAlignment="Bottom"
+                        Padding="10,8"
+                        Content="{x:Bind ViewModel.RadarSitesToggleLabel, Mode=OneWay}"
+                        ToolTipService.ToolTip="Show or hide the radar site buttons (does not hide active radar)"
+                        Click="OnToggleRadarSitesClick"/>
+
                 <!-- Collapse the whole ribbon. -->
-                <Button Grid.Column="6"
+                <Button Grid.Column="7"
                         VerticalAlignment="Bottom"
                         Padding="10,8"
                         ToolTipService.ToolTip="Hide controls"
@@ -148,6 +163,44 @@
                     <TextBlock Text="Controls"/>
                 </StackPanel>
             </Button>
+        </Border>
+
+        <!-- Radar developer diagnostics card (lower-left). Shown only while a radar loop is
+             active; floats above the ribbon. Monospace for column alignment. "Copy" puts the
+             full event timeline on the clipboard (and writes a file) for pasting into a report. -->
+        <Border HorizontalAlignment="Left"
+                VerticalAlignment="Bottom"
+                Margin="14,0,0,150"
+                MaxWidth="500"
+                CornerRadius="8"
+                Padding="14,12"
+                Background="#F00F1216"
+                BorderBrush="#3300E0FF"
+                BorderThickness="1"
+                Visibility="{x:Bind VisibleWhen(ViewModel.HasRadarLoop), Mode=OneWay}">
+            <StackPanel Spacing="8">
+                <TextBlock Text="{x:Bind ViewModel.RadarDebugText, Mode=OneWay}"
+                           FontFamily="Cascadia Mono, Consolas"
+                           FontSize="13"
+                           LineHeight="19"
+                           Foreground="#EAF6FF"
+                           IsTextSelectionEnabled="True"
+                           TextWrapping="Wrap"/>
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <Button Content="Copy debug log"
+                            Padding="8,3"
+                            FontSize="11"
+                            Click="OnCopyRadarDebugClick"/>
+                    <Button Content="Clear"
+                            Padding="8,3"
+                            FontSize="11"
+                            Click="OnClearRadarDebugClick"/>
+                    <TextBlock x:Name="RadarDebugStatus"
+                               VerticalAlignment="Center"
+                               FontSize="11"
+                               Foreground="#80E6F7FF"/>
+                </StackPanel>
+            </StackPanel>
         </Border>
     </Grid>
 </Window>

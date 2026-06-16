@@ -33,6 +33,13 @@ namespace OfflineMapsTest.Services
 		SpcOutlookProduct? Resolve(int day, SpcOutlookType type);
 
 		/// <summary>
+		/// Reads the issued / valid / expire times from the product's cached GeoJSON, or
+		/// null if the file is missing or carries no risk areas. These reflect the actual
+		/// data on disk (so they stay correct even when the cache is a refresh behind).
+		/// </summary>
+		SpcOutlookTimes? GetTimesForProduct(SpcOutlookProduct product);
+
+		/// <summary>
 		/// Fetches every product and writes each to the cache (one GeoJSON per product).
 		/// Conditional GETs skip unchanged outlooks; the last-known-good file is kept on
 		/// failure; per-product failures are isolated and reported via the results

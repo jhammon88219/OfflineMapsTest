@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -62,6 +63,62 @@ namespace OfflineMapsTest.Services
 
 		public SpcOutlookProduct? Resolve(int day, SpcOutlookType type) =>
 			_products.FirstOrDefault(p => p.Day == day && p.Type == type);
+
+		public SpcOutlookTimes? GetTimesForProduct(SpcOutlookProduct product)
+		{
+			var cacheFile = Path.Combine(CacheDirectory, product.CacheFileName);
+			if (!File.Exists(cacheFile))
+			{
+				return null;
+			}
+
+			try
+			{
+				using var doc = JsonDocument.Parse(File.ReadAllText(cacheFile));
+				if (!doc.RootElement.TryGetProperty("features", out var features) ||
+					features.ValueKind != JsonValueKind.Array ||
+					features.GetArrayLength() == 0)
+				{
+					return null; // no risk areas -> no times to show
+				}
+
+				if (!features[0].TryGetProperty("properties", out var props))
+				{
+					return null;
+				}
+
+				// Convective products expose clean ISO fields; fire-weather (ArcGIS) only
+				// carries lowercase yyyyMMddHHmm valid/expire (UTC) and no issue time.
+				var issued = ReadIso(props, "ISSUE_ISO");
+				var valid = ReadIso(props, "VALID_ISO") ?? ReadStamp(props, "valid");
+				var expire = ReadIso(props, "EXPIRE_ISO") ?? ReadStamp(props, "expire");
+
+				return (issued is null && valid is null && expire is null)
+					? null
+					: new SpcOutlookTimes(issued, valid, expire);
+			}
+			catch
+			{
+				return null; // malformed cache is non-fatal; just show no times
+			}
+		}
+
+		private static DateTimeOffset? ReadIso(JsonElement props, string name) =>
+			props.TryGetProperty(name, out var el) &&
+			el.ValueKind == JsonValueKind.String &&
+			DateTimeOffset.TryParse(el.GetString(), CultureInfo.InvariantCulture,
+				DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var dt)
+				? dt
+				: null;
+
+		private static DateTimeOffset? ReadStamp(JsonElement props, string name) =>
+			props.TryGetProperty(name, out var el) &&
+			el.ValueKind == JsonValueKind.String &&
+			DateTimeOffset.TryParseExact(el.GetString(), "yyyyMMddHHmm",
+				CultureInfo.InvariantCulture,
+				DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var dt)
+				? dt
+				: null;
 
 		public async Task<IReadOnlyList<SpcOutlookFetchResult>> RefreshAllAsync(CancellationToken cancellationToken = default)
 		{

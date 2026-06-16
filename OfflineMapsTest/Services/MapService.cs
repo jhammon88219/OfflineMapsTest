@@ -54,6 +54,12 @@ namespace OfflineMapsTest.Services
 		public Task SetSelectedRadarSiteAsync(string? siteId) =>
 			_mapView.RunScriptAsync(Call("setSelectedRadarSite", siteId ?? string.Empty));
 
+		public Task SetRadarSitesVisibleAsync(bool visible) =>
+			_mapView.RunScriptAsync(Call("setRadarSitesVisible", visible));
+
+		public Task SetRadarSitesStatusAsync(string offlineIdsJson) =>
+			_mapView.RunScriptAsync(Call("setRadarSitesStatus", offlineIdsJson));
+
 		public Task FlyToAsync(double longitude, double latitude, double zoom) =>
 			_mapView.RunScriptAsync(Call("flyTo", longitude, latitude, zoom));
 

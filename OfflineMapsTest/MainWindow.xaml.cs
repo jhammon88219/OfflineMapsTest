@@ -72,6 +72,10 @@ namespace OfflineMapsTest
 				var failed = results.Count(r => r.Status is SpcOutlookFetchStatus.FailedCacheKept
 					or SpcOutlookFetchStatus.FailedNoCache);
 				System.Diagnostics.Debug.WriteLine($"[SPC] refreshed {results.Count} products, {failed} failed.");
+
+				// Re-apply the current outlook on the UI thread so a first-run (empty cache)
+				// overlay appears and the issued/valid readout picks up the new times.
+				DispatcherQueue.TryEnqueue(() => ViewModel.OnOutlooksRefreshed());
 			}
 			catch (Exception ex)
 			{
@@ -163,7 +167,9 @@ namespace OfflineMapsTest
 				{
 					if (root.TryGetProperty("msg", out var msgEl))
 					{
-						System.Diagnostics.Debug.WriteLine($"[radar-js] {msgEl.GetString()}");
+						var msg = msgEl.GetString();
+						System.Diagnostics.Debug.WriteLine($"[radar-js] {msg}");
+						Services.RadarDebugLog.Log($"js  {msg}");
 					}
 					return;
 				}
@@ -216,6 +222,63 @@ namespace OfflineMapsTest
 		private void OnTogglePlayClick(object sender, RoutedEventArgs e)
 		{
 			ViewModel.ToggleRadarPlay();
+		}
+
+		private void OnToggleRadarSitesClick(object sender, RoutedEventArgs e)
+		{
+			ViewModel.ToggleRadarSitesVisible();
+		}
+
+		// Copies the full radar diagnostic timeline to the clipboard AND writes it to a file,
+		// so it survives if the clipboard is cleared. The file path is shown on the card.
+		private void OnCopyRadarDebugClick(object sender, RoutedEventArgs e)
+		{
+			var report = BuildRadarReport();
+			try
+			{
+				var dp = new Windows.ApplicationModel.DataTransfer.DataPackage();
+				dp.SetText(report);
+				Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(dp);
+			}
+			catch (Exception ex)
+			{
+				System.Diagnostics.Debug.WriteLine($"[radar] clipboard failed: {ex.Message}");
+			}
+
+			string status;
+			try
+			{
+				var dir = Path.Combine(
+					Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+					"OfflineMapsTest", "RadarLevel2");
+				Directory.CreateDirectory(dir);
+				var path = Path.Combine(dir, $"radar-debug-{DateTime.Now:yyyyMMdd_HHmmss}.log");
+				File.WriteAllText(path, report);
+				status = $"copied + saved: {path}";
+			}
+			catch (Exception ex)
+			{
+				status = $"copied (file save failed: {ex.Message})";
+			}
+
+			RadarDebugStatus.Text = status;
+		}
+
+		private void OnClearRadarDebugClick(object sender, RoutedEventArgs e)
+		{
+			Services.RadarDebugLog.Clear();
+			RadarDebugStatus.Text = "log cleared";
+		}
+
+		// Full report = a small header + the entire event timeline.
+		private string BuildRadarReport()
+		{
+			var header =
+				$"OfflineMapsTest radar debug report\n" +
+				$"generated: {DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss zzz} ({DateTimeOffset.UtcNow:HH:mm:ss}Z)\n" +
+				$"--- current state ---\n{ViewModel.RadarDebugText}\n" +
+				$"--- event timeline ({Services.RadarDebugLog.TotalCount} total) ---\n";
+			return header + Services.RadarDebugLog.Dump();
 		}
 
 		// x:Bind function mapping a bool to Visibility for the ribbon / reveal handle.

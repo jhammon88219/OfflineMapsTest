@@ -30,7 +30,7 @@ let decoderPromise = null;
 function loadDecoder() {
     if (!decoderPromise) {
         globalThis.process = globalThis.process || { env: {}, browser: true };
-        decoderPromise = import('./nexrad-level-2-data.esm.js').then(function (mod) {
+        decoderPromise = import('./vendor/nexrad-level-2-data.esm.js').then(function (mod) {
             return { Buffer: mod.Buffer, Level2Radar: mod.Level2Radar };
         });
     }
@@ -115,12 +115,31 @@ function buildGeometry(radar, siteLat, siteLon, minDbz) {
 // Decodes a volume ArrayBuffer and returns { geom, decodeMs, buildMs }. geom is null when
 // nothing is above threshold.
 export function decodeAndBuild(ab, siteLat, siteLon, minDbz) {
+    const bytes = ab.byteLength;
     return loadDecoder().then(function (dec) {
         const t0 = performance.now();
         const radar = new dec.Level2Radar(dec.Buffer.from(new Uint8Array(ab)));
         const t1 = performance.now();
         const geom = buildGeometry(radar, siteLat, siteLon, minDbz);
         const t2 = performance.now();
-        return { geom: geom, decodeMs: Math.round(t1 - t0), buildMs: Math.round(t2 - t1) };
+        // Best-effort diagnostics: radial + gate counts of the lowest-tilt reflectivity, to
+        // see whether a slow frame is carrying extra radials/cuts vs. a fast one.
+        let radials = 0, gates = 0;
+        try {
+            const elevs = radar.listElevations();
+            if (elevs && elevs.length) {
+                radar.setElevation(Math.min.apply(null, elevs));
+                const refl = radar.getHighresReflectivity();
+                const arr = Array.isArray(refl) ? refl : [refl];
+                radials = arr.length;
+                for (let i = 0; i < arr.length; i++) {
+                    if (arr[i] && arr[i].moment_data) { gates = arr[i].moment_data.length; break; }
+                }
+            }
+        } catch (e) { /* stats only */ }
+        return {
+            geom: geom, decodeMs: Math.round(t1 - t0), buildMs: Math.round(t2 - t1),
+            radials: radials, gates: gates, bytes: bytes,
+        };
     });
 }

@@ -54,6 +54,18 @@ namespace OfflineMapsTest.Services
 		/// <summary>Highlights the selected site marker (empty clears the highlight).</summary>
 		Task SetSelectedRadarSiteAsync(string? siteId);
 
+		/// <summary>
+		/// Shows or hides all radar site marker buttons. Independent of the radar layer —
+		/// hiding the markers never clears or hides an active radar loop.
+		/// </summary>
+		Task SetRadarSitesVisibleAsync(bool visible);
+
+		/// <summary>
+		/// Marks which site markers are offline (no recent data in the feed). JSON is an array
+		/// of site IDs; those markers render in the muted "offline" style.
+		/// </summary>
+		Task SetRadarSitesStatusAsync(string offlineIdsJson);
+
 		/// <summary>Animates the map to the given center and zoom.</summary>
 		Task FlyToAsync(double longitude, double latitude, double zoom);
 	}

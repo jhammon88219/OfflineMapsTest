@@ -36,6 +36,8 @@ try {
     let radarMarkers = {};
     let radarMarkerObjs = [];
     let selectedSiteId = null;
+    let radarSitesVisible = true;
+    let radarSiteOffline = new Set(); // site ids with no recent data in the feed (rendered "down")
 
     // SPC marks its "significant"/intensity areas as separate polygons (LABEL like
     // CIG1/CIG2 or SIGN). They should read as hatching over the probability color, not
@@ -175,7 +177,12 @@ try {
             'border:1px solid #0a0a0a;border-radius:4px;padding:3px 7px;cursor:pointer;white-space:nowrap;' +
             'user-select:none;box-shadow:0 0 6px rgba(204,255,0,.7);}' +
             '.radar-site-btn:hover{filter:brightness(1.12);}' +
-            '.radar-site-btn.selected{background:#ff7a00;box-shadow:0 0 9px rgba(255,122,0,.95);}';
+            '.radar-site-btn.selected{background:#ff7a00;box-shadow:0 0 9px rgba(255,122,0,.95);}' +
+            // Offline (no recent data in the feed): muted dark chip + soft red glow, dimmed so
+            // the live neon sites read as active. Still clickable. Selected overrides.
+            '.radar-site-btn.down{background:#2a2d31;color:#d56b6b;border-color:#8a3a3a;' +
+            'box-shadow:0 0 5px rgba(220,70,70,.55);opacity:.78;}' +
+            '.radar-site-btn.down.selected{background:#ff7a00;color:#0a0a0a;opacity:1;}';
         document.head.appendChild(siteStyle);
     }
 
@@ -189,8 +196,10 @@ try {
             var el = document.createElement('div');
             el.className = 'radar-site-btn';
             el.textContent = s.id;
-            el.title = s.name;
+            el.dataset.siteName = s.name || '';
+            if (!radarSitesVisible) el.style.display = 'none';
             if (selectedSiteId === s.id) el.classList.add('selected');
+            applySiteStatus(el, s.id); // sets .down class + tooltip from the current offline set
             el.addEventListener('click', function (ev) {
                 ev.stopPropagation();
                 if (window.chrome && window.chrome.webview) {
@@ -206,6 +215,28 @@ try {
         selectedSiteId = id || null;
         Object.keys(radarMarkers).forEach(function (k) {
             radarMarkers[k].classList.toggle('selected', k === selectedSiteId);
+        });
+    };
+    // Applies a marker's offline styling + tooltip from the current radarSiteOffline set.
+    function applySiteStatus(el, id) {
+        var down = radarSiteOffline.has(id);
+        el.classList.toggle('down', down);
+        var name = el.dataset.siteName || '';
+        el.title = name + (down ? ' · offline (no recent data)' : '');
+    }
+    // Host command: which sites are offline (array of ids). Re-styles existing markers.
+    window.setRadarSitesStatus = function (json) {
+        try { radarSiteOffline = new Set((typeof json === 'string') ? JSON.parse(json) : json); }
+        catch (e) { radarSiteOffline = new Set(); }
+        Object.keys(radarMarkers).forEach(function (k) { applySiteStatus(radarMarkers[k], k); });
+    };
+    // Show/hide all site buttons. Independent of the radar layer — an active loop keeps
+    // rendering while the markers are hidden. Iterate the marker objects (every marker)
+    // rather than the id-keyed map, so we never miss one if two sites share an id.
+    window.setRadarSitesVisible = function (visible) {
+        radarSitesVisible = !!visible;
+        radarMarkerObjs.forEach(function (m) {
+            m.getElement().style.display = radarSitesVisible ? '' : 'none';
         });
     };
 

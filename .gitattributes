@@ -61,3 +61,14 @@
 #*.PDF   diff=astextplain
 #*.rtf   diff=astextplain
 #*.RTF   diff=astextplain
+
+###############################################################################
+# GitHub Linguist: keep the repository language stats reflecting OUR code.
+#
+# Assets/Map/vendor/ holds third-party web libraries we vendor verbatim
+# (MapLibre GL JS, PMTiles, the NEXRAD Level II decoder, seek-bzip) — downloaded,
+# not authored here, and ~97% of the repo's JavaScript by size. Marking them
+# vendored excludes them from the language breakdown so it reflects the code we
+# actually wrote. See Assets/Map/README.md for what each file is and why it's JS.
+###############################################################################
+OfflineMapsTest/Assets/Map/vendor/** linguist-vendored

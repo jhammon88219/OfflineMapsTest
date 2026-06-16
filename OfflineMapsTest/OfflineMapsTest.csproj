@@ -19,13 +19,16 @@
     <None Remove="Assets\Map\radar.js" />
     <None Remove="Assets\Map\radar-decode.js" />
     <None Remove="Assets\Map\radar-worker.js" />
-    <None Remove="Assets\Map\nexrad-level-2-data.esm.js" />
-    <None Remove="Assets\Map\seek-bzip.esm.js" />
-    <None Remove="Assets\Map\maplibre-gl.css" />
-    <None Remove="Assets\Map\maplibre-gl.js" />
+    <None Remove="Assets\Map\vendor\nexrad-level-2-data.esm.js" />
+    <None Remove="Assets\Map\vendor\seek-bzip.esm.js" />
+    <None Remove="Assets\Map\vendor\maplibre-gl.css" />
+    <None Remove="Assets\Map\vendor\maplibre-gl.js" />
   </ItemGroup>
 
   <ItemGroup>
+    <Content Include="Assets\radar-sites.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
     <Content Include="Assets\SplashScreen.scale-200.png" />
     <Content Include="Assets\LockScreenLogo.scale-200.png" />
     <Content Include="Assets\Square150x150Logo.scale-200.png" />
@@ -68,19 +71,19 @@
     <Content Update="Assets\Map\radar-worker.js">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
-    <Content Update="Assets\Map\nexrad-level-2-data.esm.js">
+    <Content Update="Assets\Map\vendor\nexrad-level-2-data.esm.js">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
-    <Content Update="Assets\Map\seek-bzip.esm.js">
+    <Content Update="Assets\Map\vendor\seek-bzip.esm.js">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
-    <Content Update="Assets\Map\maplibre-gl.css">
+    <Content Update="Assets\Map\vendor\maplibre-gl.css">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
-    <Content Update="Assets\Map\maplibre-gl.js">
+    <Content Update="Assets\Map\vendor\maplibre-gl.js">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
-    <Content Update="Assets\Map\pmtiles.js">
+    <Content Update="Assets\Map\vendor\pmtiles.js">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
     <Content Update="Assets\Map\style-dark.json">

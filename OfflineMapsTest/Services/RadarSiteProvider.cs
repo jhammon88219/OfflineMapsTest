@@ -1,30 +1,74 @@
+using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text.Json;
 using OfflineMapsTest.Models;
 
 namespace OfflineMapsTest.Services
 {
 	/// <summary>
-	/// Default <see cref="IRadarSiteProvider"/>. A curated subset of WSR-88D sites for v1;
-	/// expand toward the full ~160-site list later. Coordinates are the published antenna
-	/// locations. Hardcoded for now, like <see cref="RegionProvider"/>.
+	/// Default <see cref="IRadarSiteProvider"/>. Loads the full WSR-88D network (~160 sites)
+	/// from the bundled <c>Assets/radar-sites.json</c> data file (id/name/lat/lon), which is
+	/// regenerable from NOAA's published station table rather than hand-curated in code. Stays
+	/// fully offline — the network is effectively static. <see cref="RadarSite.Zoom"/> is no
+	/// longer read (site clicks don't recenter), so a constant default is applied. Parsed once
+	/// and cached; falls back to a tiny built-in set if the file is missing or unparseable so
+	/// the picker never comes up empty.
 	/// </summary>
 	public sealed class RadarSiteProvider : IRadarSiteProvider
 	{
-		public IReadOnlyList<RadarSite> GetSites() => new[]
+		// Single-site view ~230 km range. Vestigial (clicks no longer recenter) but the model
+		// still carries it; supply one default for every site.
+		private const double DefaultZoom = 7.5;
+
+		private static readonly JsonSerializerOptions JsonOptions = new()
 		{
-			// Id, Name, Latitude, Longitude, Zoom (single-site view ~230 km range)
-			new RadarSite("KTLX", "Oklahoma City, OK", 35.3331, -97.2778, 7.5),
-			new RadarSite("KFWS", "Dallas / Fort Worth, TX", 32.5731, -97.3031, 7.5),
-			new RadarSite("KEAX", "Kansas City, MO", 38.8103, -94.2645, 7.5),
-			new RadarSite("KLOT", "Chicago, IL", 41.6044, -88.0843, 7.5),
-			new RadarSite("KOKX", "New York City, NY", 40.8656, -72.8639, 7.5),
-			new RadarSite("KMLB", "Melbourne, FL", 28.1131, -80.6544, 7.5),
-			new RadarSite("KFFC", "Atlanta, GA", 33.3636, -84.5658, 7.5),
-			new RadarSite("KIWA", "Phoenix, AZ", 33.2892, -111.6700, 7.5),
-			new RadarSite("KMUX", "San Francisco Bay Area, CA", 37.1551, -121.8984, 7.5),
-			new RadarSite("KATX", "Seattle, WA", 48.1947, -122.4956, 7.5),
-			new RadarSite("KBMX", "Birmingham, AL", 33.1722, -86.7697, 7.5),
-			new RadarSite("KLWX", "Washington, DC", 38.9753, -77.4778, 7.5),
+			PropertyNameCaseInsensitive = true,
 		};
+
+		private readonly Lazy<IReadOnlyList<RadarSite>> _sites = new(LoadSites);
+
+		public IReadOnlyList<RadarSite> GetSites() => _sites.Value;
+
+		private static IReadOnlyList<RadarSite> LoadSites()
+		{
+			try
+			{
+				var path = Path.Combine(AppContext.BaseDirectory, "Assets", "radar-sites.json");
+				var json = File.ReadAllText(path);
+				var dtos = JsonSerializer.Deserialize<List<SiteDto>>(json, JsonOptions);
+				if (dtos is { Count: > 0 })
+				{
+					return dtos
+						.Where(d => !string.IsNullOrWhiteSpace(d.Id))
+						.Select(d => new RadarSite(d.Id!, d.Name ?? d.Id!, d.Lat, d.Lon, DefaultZoom))
+						.ToList();
+				}
+			}
+			catch (Exception ex)
+			{
+				System.Diagnostics.Debug.WriteLine($"[radar] radar-sites.json load failed: {ex.Message}");
+			}
+
+			return Fallback;
+		}
+
+		// Used only if the bundled data file can't be read — keeps the map usable.
+		private static readonly IReadOnlyList<RadarSite> Fallback = new[]
+		{
+			new RadarSite("KTLX", "Oklahoma City, OK", 35.3331, -97.2778, DefaultZoom),
+			new RadarSite("KFWS", "Dallas / Fort Worth, TX", 32.5731, -97.3031, DefaultZoom),
+			new RadarSite("KLOT", "Chicago, IL", 41.6044, -88.0843, DefaultZoom),
+			new RadarSite("KOKX", "New York City, NY", 40.8656, -72.8639, DefaultZoom),
+		};
+
+		private sealed class SiteDto
+		{
+			public string? Id { get; set; }
+			public string? Name { get; set; }
+			public double Lat { get; set; }
+			public double Lon { get; set; }
+		}
 	}
 }

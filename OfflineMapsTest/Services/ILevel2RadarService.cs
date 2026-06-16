@@ -29,5 +29,24 @@ namespace OfflineMapsTest.Services
 		/// null if the fetch failed.
 		/// </summary>
 		Task<RadarVolume?> EnsureCachedAsync(RadarSite site, string key, CancellationToken cancellationToken = default);
+
+		/// <summary>
+		/// Builds the freshest possible single-tilt frame from the near-real-time
+		/// <c>unidata-nexrad-level2-chunks</c> bucket: finds the newest (often still in-progress)
+		/// volume, assembles its <c>S</c>+<c>I</c> chunks, and extracts the lowest tilt — giving
+		/// ~1-2 min latency vs the archive bucket's ~10 min. Returns null if no fresh volume is
+		/// available yet or its lowest tilt hasn't finished scanning (caller should fall back to
+		/// the newest archive volume). Cached + served from the same virtual host as archive
+		/// frames.
+		/// </summary>
+		Task<RadarVolume?> GetLiveFrameAsync(RadarSite site, CancellationToken cancellationToken = default);
+
+		/// <summary>
+		/// Returns the set of site IDs that have data in the archive bucket within the last day —
+		/// i.e. the sites this feed can actually show right now. A site NOT in the set is offline
+		/// in this feed (no data flowing), like KLIX, even if the radar is physically scanning.
+		/// One date-prefix listing per day (today + yesterday); cheap.
+		/// </summary>
+		Task<IReadOnlyCollection<string>> GetLiveSiteIdsAsync(CancellationToken cancellationToken = default);
 	}
 }

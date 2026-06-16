@@ -26,6 +26,9 @@ namespace OfflineMapsTest.Services
 		public const string CacheHostName = "radarlevel2";
 
 		private const string BucketBase = "https://unidata-nexrad-level2.s3.amazonaws.com/";
+		// Near-real-time chunk bucket: per-volume folders of S/I/E chunks streamed via LDM as
+		// each completes (see GetLiveFrameAsync). Keys: <SITE>/<VOLUME#>/<yyyyMMdd>-<HHmmss>-<seq>-<S|I|E>.
+		private const string ChunksBase = "https://unidata-nexrad-level2-chunks.s3.amazonaws.com/";
 		private static readonly XNamespace S3 = "http://s3.amazonaws.com/doc/2006-03-01/";
 
 		private readonly HttpClient _http;
@@ -109,14 +112,521 @@ namespace OfflineMapsTest.Services
 			}
 		}
 
+		// Safety cap on chunks decoded per live build (a full volume is ~67 chunks).
+		private const int LiveChunkCap = 90;
+
+		// Per-volume decoded-chunk cache so repeated polls of the same in-progress volume only
+		// download + decompress the NEW chunks (bounds bandwidth to ~one volume's worth). Keyed
+		// by site/volume; reset when the newest volume changes.
+		private string? _liveVolKey;
+		private byte[]? _liveHeader;
+		private readonly SortedDictionary<int, (byte[] block, int elev)> _liveBlocks = new();
+
+		public async Task<RadarVolume?> GetLiveFrameAsync(RadarSite site, CancellationToken cancellationToken = default)
+		{
+			try
+			{
+				var newest = await FindNewestChunkVolumeAsync(site.Id, cancellationToken);
+				if (newest is null)
+				{
+					RadarDebugLog.Log($"svc live {site.Id}: no chunk volumes found");
+					return null;
+				}
+
+				var (vol, start) = newest.Value;
+				RadarDebugLog.Log($"svc live {site.Id}: newest vol={vol} start={start:HH:mm:ss}Z age={(DateTimeOffset.UtcNow - start).TotalMinutes:0.0}m");
+
+				// The folder can hold chunks from several volumes (it's reused as the number
+				// cycles), so keep only the chunks of the target volume (matching start stamp).
+				var chunks = (await ListChunkObjectsAsync(site.Id, vol, cancellationToken))
+					.Where(c => ParseChunkStart(c.key) == start)
+					.ToList();
+				if (chunks.Count == 0 || !chunks.Any(c => c.kind == 'S'))
+				{
+					RadarDebugLog.Log($"svc live {site.Id}: vol={vol} no S chunk ({chunks.Count} chunks) -> can't decode");
+					return null; // no header chunk (older volume, partially expired) -> can't decode
+				}
+				chunks.Sort((a, b) => a.seq.CompareTo(b.seq));
+
+				// Switch volumes -> drop the cache and start accumulating the new one. Keyed by
+				// start too, since the same folder number is reused across cycles.
+				var key = $"{site.Id}/{vol}/{start:yyyyMMddHHmmss}";
+				if (_liveVolKey != key)
+				{
+					_liveVolKey = key;
+					_liveHeader = null;
+					_liveBlocks.Clear();
+				}
+
+				// Download + decompress only chunks we don't already have. Each chunk is one LDM
+				// record: S = [24-byte header][control word][BZh…], I/E = [control word][BZh…].
+				var icao = System.Text.Encoding.ASCII.GetBytes(site.Id);
+				var added = 0;
+				foreach (var c in chunks)
+				{
+					if (_liveBlocks.Count >= LiveChunkCap)
+					{
+						break;
+					}
+					if (_liveBlocks.ContainsKey(c.seq))
+					{
+						continue;
+					}
+					cancellationToken.ThrowIfCancellationRequested();
+
+					byte[] bytes;
+					using (var resp = await _http.GetAsync(ChunksBase + c.key, HttpCompletionOption.ResponseHeadersRead, cancellationToken))
+					{
+						if (!resp.IsSuccessStatusCode)
+						{
+							if (c.kind == 'S')
+							{
+								return null; // header vanished mid-read; bail
+							}
+							continue; // a later chunk expired; use what we have
+						}
+						bytes = await resp.Content.ReadAsByteArrayAsync(cancellationToken);
+					}
+
+					var isS = c.kind == 'S';
+					if (isS && bytes.Length >= 24)
+					{
+						_liveHeader = bytes[..24];
+					}
+
+					var block = await Task.Run(() => DecompressChunk(bytes, isS), cancellationToken);
+					if (block is null)
+					{
+						continue;
+					}
+					_liveBlocks[c.seq] = (block, ElevationOf(block, icao));
+					added++;
+				}
+
+				if (_liveHeader is null)
+				{
+					RadarDebugLog.Log($"svc live {site.Id}: vol={vol} header chunk missing -> can't decode");
+					return null;
+				}
+
+				var ordered = _liveBlocks.Values.ToList();
+				var header = _liveHeader;
+				var sel = await Task.Run(() => SelectLatestSweep(header, ordered, icao), cancellationToken);
+				if (!sel.complete || sel.data is null)
+				{
+					RadarDebugLog.Log($"svc live {site.Id}: vol={vol} no complete 0.5° sweep yet ({_liveBlocks.Count} chunks, +{added}) -> fall back");
+					return null;
+				}
+
+				// Trust the parsed radial time only if it's plausibly within this volume's life
+				// (>= volume start, <= now); otherwise fall back to the volume-start timestamp so
+				// a bad parse can never produce a bogus age.
+				var nowUtc = DateTimeOffset.UtcNow;
+				var ts = sel.dataTime is { } dt && dt >= start.AddMinutes(-2) && dt <= nowUtc.AddMinutes(2)
+					? dt
+					: start;
+				var cacheFile = LiveCacheFileFor(site.Id, ts);
+				if (!File.Exists(cacheFile))
+				{
+					var temp = cacheFile + ".tmp";
+					await File.WriteAllBytesAsync(temp, sel.data, cancellationToken);
+					File.Move(temp, cacheFile, overwrite: true);
+				}
+				PruneLiveCache(site.Id, cacheFile);
+
+				var mode = DescribeMode(sel.vcp, sel.sweeps);
+				RadarDebugLog.Log($"svc live {site.Id}: vol={vol} BUILT latest 0.5° sweep @ {ts:HH:mm:ss}Z " +
+					$"(age {(DateTimeOffset.UtcNow - ts).TotalMinutes:0.0}m, {_liveBlocks.Count} chunks, {mode})");
+				return new RadarVolume(LiveUrlFor(site.Id, ts), site, ts, mode);
+			}
+			catch (OperationCanceledException)
+			{
+				throw;
+			}
+			catch (Exception ex)
+			{
+				System.Diagnostics.Debug.WriteLine($"[radar] {site.Id} live frame failed: {ex.Message}");
+				RadarDebugLog.Log($"svc live {site.Id}: ERROR {ex.Message}");
+				return null;
+			}
+		}
+
+		// Decompresses one chunk's single LDM record. S chunks carry the 24-byte volume header +
+		// a 4-byte control word before the bzip2 stream; I/E chunks just the control word.
+		private static byte[]? DecompressChunk(byte[] chunk, bool isS)
+		{
+			var offset = isS ? 28 : 4;
+			if (chunk.Length <= offset)
+			{
+				return null;
+			}
+			try
+			{
+				using var input = new MemoryStream(chunk, offset, chunk.Length - offset, writable: false);
+				using var bz = new BZip2Stream(input, CompressionMode.Decompress, false);
+				using var output = new MemoryStream(1024 * 1024);
+				bz.CopyTo(output);
+				return output.ToArray();
+			}
+			catch
+			{
+				return null; // a partial/truncated trailing chunk of an in-progress volume
+			}
+		}
+
+		// From the decoded records, picks the LATEST complete 0.5° (elevation-1) sweep — the
+		// freshest base-reflectivity scan available, which in SAILS precip VCPs is a mid-volume
+		// re-scan newer than the volume start. Returns the minimal single-tilt buffer (24-byte
+		// header + leading metadata records + that sweep's radials), its actual radial time, the
+		// count of complete 0.5° sweeps (SAILS indicator), and the VCP number.
+		private static (byte[]? data, bool complete, DateTimeOffset? dataTime, int sweeps, int vcp)
+			SelectLatestSweep(byte[] header, List<(byte[] block, int elev)> blocks, byte[] icao)
+		{
+			var firstRadial = blocks.FindIndex(b => b.elev >= 1);
+			if (firstRadial < 0)
+			{
+				return (null, false, null, 0, 0);
+			}
+
+			var vcp = ReadVcp(blocks[firstRadial].block, icao);
+
+			// Walk the radials, grouping consecutive elevation-1 records into sweeps. A sweep is
+			// complete once a later record has a different elevation (the antenna moved on).
+			var sweeps = new List<(int start, int end)>();
+			var i = firstRadial;
+			while (i < blocks.Count)
+			{
+				if (blocks[i].elev == 1)
+				{
+					var s = i;
+					while (i < blocks.Count && blocks[i].elev == 1)
+					{
+						i++;
+					}
+					var complete = i < blocks.Count; // terminated by a non-0.5° record
+					if (complete)
+					{
+						sweeps.Add((s, i));
+					}
+				}
+				else
+				{
+					i++;
+				}
+			}
+
+			if (sweeps.Count == 0)
+			{
+				return (null, false, null, 0, vcp);
+			}
+
+			var last = sweeps[^1];
+			var dataTime = ReadCollectionTime(blocks[last.start].block, icao);
+
+			using var output = new MemoryStream(8 * 1024 * 1024);
+			output.Write(header, 0, header.Length);
+			for (var m = 0; m < firstRadial; m++) // leading metadata (Msg 5/13/15/18/…) the decoder needs
+			{
+				output.Write(blocks[m].block, 0, blocks[m].block.Length);
+			}
+			for (var k = last.start; k < last.end; k++)
+			{
+				output.Write(blocks[k].block, 0, blocks[k].block.Length);
+			}
+
+			return (output.ToArray(), true, dataTime, sweeps.Count, vcp);
+		}
+
+		// VCP number from a Message 31 radial's Volume Data Constant Block (the "VOL" block),
+		// reached via the block pointer at ICAO+32; VCP is a 2-byte int at VOL+40. Best effort.
+		private static int ReadVcp(byte[] block, byte[] icao)
+		{
+			var ic = IndexOf(block, icao);
+			if (ic < 0 || ic + 36 > block.Length)
+			{
+				return 0;
+			}
+			var volPtr = (block[ic + 32] << 24) | (block[ic + 33] << 16) | (block[ic + 34] << 8) | block[ic + 35];
+			var pos = ic + volPtr + 40;
+			if (volPtr <= 0 || pos + 2 > block.Length)
+			{
+				return 0;
+			}
+			return (block[pos] << 8) | block[pos + 1];
+		}
+
+		// Radial collection time from a Message 31 header: ms-since-midnight (ICAO+4, 4 bytes) and
+		// modified Julian date (ICAO+8, 2 bytes; day 1 = 1970-01-01).
+		private static DateTimeOffset? ReadCollectionTime(byte[] block, byte[] icao)
+		{
+			var ic = IndexOf(block, icao);
+			if (ic < 0 || ic + 10 > block.Length)
+			{
+				return null;
+			}
+			long ms = ((long)block[ic + 4] << 24) | ((long)block[ic + 5] << 16) | ((long)block[ic + 6] << 8) | block[ic + 7];
+			var julian = (block[ic + 8] << 8) | block[ic + 9];
+			if (julian <= 0 || ms < 0 || ms > 86_400_000)
+			{
+				return null;
+			}
+			return new DateTimeOffset(1970, 1, 1, 0, 0, 0, TimeSpan.Zero).AddDays(julian - 1).AddMilliseconds(ms);
+		}
+
+		// Real WSR-88D volume coverage patterns. Used to validate the (best-effort) VCP parse:
+		// anything outside this set is a bad read, shown as "VCP ?" rather than a wrong number.
+		private static readonly HashSet<int> ClearAirVcps = new() { 31, 32, 35, 90 };
+		private static readonly HashSet<int> PrecipVcps = new() { 11, 12, 21, 112, 121, 211, 212, 215, 221 };
+
+		// Maps the VCP number to a human label. Clear-air VCPs scan ~every 10 min and never use
+		// SAILS; precip VCPs (12/212/215/…) run ~4-6 min and may insert extra 0.5° sweeps. An
+		// unrecognized number means the parse failed -> "VCP ?" (no category, since we can't tell).
+		private static string DescribeMode(int vcp, int sweeps)
+		{
+			var clearAir = ClearAirVcps.Contains(vcp);
+			if (!clearAir && !PrecipVcps.Contains(vcp))
+			{
+				return $"VCP ? · 0.5°×{sweeps}";
+			}
+			var sails = sweeps > 1 ? $" · SAILS/MRLE ×{sweeps - 1}" : "";
+			return $"VCP {vcp} · {(clearAir ? "clear-air" : "precip")} · 0.5°×{sweeps}{sails}";
+		}
+
+		// Finds the newest volume folder in the chunks bucket for a site, returning its number
+		// and start time. Volume numbers cycle 1..999 and wrap, AND stale orphans span the whole
+		// 1..999 range (each site sits at a different point in its cycle), so the number tells us
+		// nothing reliable about recency — the newest can be anywhere (e.g. KVNX=383, KFDR=240).
+		// A full key scan to read every timestamp costs ~40 list requests, so instead we exploit
+		// structure: present numbers form a few contiguous RUNS separated by gaps, and the newest
+		// volume always ends one run. We collect the ends of the substantial runs (plus the run
+		// holding the lowest number, to catch a freshly-wrapped run starting at 1) and peek just
+		// those few timestamps — typically 2-3 requests — taking the latest.
+		private async Task<(string vol, DateTimeOffset start)?> FindNewestChunkVolumeAsync(string siteId, CancellationToken ct)
+		{
+			var folders = await ListChunkVolumeFoldersAsync(siteId, ct);
+			var nums = folders
+				.Select(f => int.TryParse(f, out var n) ? n : -1)
+				.Where(n => n >= 0)
+				.Distinct()
+				.OrderBy(n => n)
+				.ToList();
+			if (nums.Count == 0)
+			{
+				return null;
+			}
+
+			// Split the present numbers into contiguous runs.
+			var runs = new List<(int lo, int hi)>();
+			var runStart = nums[0];
+			for (var i = 1; i <= nums.Count; i++)
+			{
+				if (i == nums.Count || nums[i] != nums[i - 1] + 1)
+				{
+					runs.Add((runStart, nums[i - 1]));
+					if (i < nums.Count)
+					{
+						runStart = nums[i];
+					}
+				}
+			}
+
+			// Peek a folder's NEWEST volume start (memoized within this call), so the binary
+			// search doesn't re-list folders.
+			var peeked = new Dictionary<int, DateTimeOffset?>();
+			async Task<DateTimeOffset?> Ts(int num)
+			{
+				if (!peeked.TryGetValue(num, out var v))
+				{
+					v = await NewestVolumeStartAsync(siteId, num, ct);
+					peeked[num] = v;
+				}
+				return v;
+			}
+
+			const int minRunForCandidate = 5;
+			(string vol, DateTimeOffset start)? best = null;
+			void Consider(int num, DateTimeOffset? ts)
+			{
+				if (ts is { } t && (best is null || t > best.Value.start))
+				{
+					best = (num.ToString(CultureInfo.InvariantCulture), t);
+				}
+			}
+
+			foreach (var (lo, hi) in runs)
+			{
+				ct.ThrowIfCancellationRequested();
+				if (hi - lo + 1 < minRunForCandidate && lo != nums[0])
+				{
+					continue; // skip tiny orphan runs (but keep the run holding the lowest number)
+				}
+
+				var tsLo = await Ts(lo);
+				var tsHi = await Ts(hi);
+				if (tsLo is null) { Consider(hi, tsHi); continue; }
+				if (tsHi is null) { Consider(lo, tsLo); continue; }
+
+				if (tsLo.Value <= tsHi.Value)
+				{
+					Consider(hi, tsHi); // monotonic in time: newest at the run's numeric end
+				}
+				else
+				{
+					// The run is contiguous in NUMBER but wraps in TIME — folders are reused, and
+					// retention drops the oldest, so the current cycle's (newest) data sits at the
+					// LOW end and the previous cycle's leftovers at the high end. The newest is the
+					// peak: the largest number whose newest start is still >= the low end's. Binary
+					// search (rotated-array max), ~log(n) peeks.
+					var target = tsLo.Value;
+					int l = lo, r = hi, ans = lo;
+					var ansTs = tsLo.Value;
+					while (l <= r)
+					{
+						ct.ThrowIfCancellationRequested();
+						var mid = l + (r - l) / 2;
+						var tm = await Ts(mid);
+						if (tm is { } t && t >= target) { ans = mid; ansTs = t; l = mid + 1; }
+						else { r = mid - 1; }
+					}
+					Consider(ans, ansTs);
+				}
+			}
+			return best;
+		}
+
+		// Lists the volume "folders" (CommonPrefixes) under <siteId>/ in the chunks bucket.
+		private async Task<List<string>> ListChunkVolumeFoldersAsync(string siteId, CancellationToken ct)
+		{
+			var prefix = $"{siteId}/";
+			var result = new List<string>();
+			string? continuation = null;
+
+			do
+			{
+				var url = $"{ChunksBase}?list-type=2&delimiter=%2F&prefix={Uri.EscapeDataString(prefix)}&max-keys=1000";
+				if (continuation is not null)
+				{
+					url += $"&continuation-token={Uri.EscapeDataString(continuation)}";
+				}
+
+				var xml = await _http.GetStringAsync(url, ct);
+				var doc = XDocument.Parse(xml);
+				foreach (var cp in doc.Descendants(S3 + "CommonPrefixes"))
+				{
+					var p = cp.Element(S3 + "Prefix")?.Value; // e.g. "KTLX/933/"
+					var parts = p?.TrimEnd('/').Split('/');
+					if (parts is { Length: 2 })
+					{
+						result.Add(parts[1]);
+					}
+				}
+
+				continuation = doc.Root?.Element(S3 + "IsTruncated")?.Value == "true"
+					? doc.Root?.Element(S3 + "NextContinuationToken")?.Value
+					: null;
+			}
+			while (continuation is not null);
+
+			return result;
+		}
+
+		// The NEWEST volume start time in a folder. A folder is reused as the volume number cycles,
+		// so it can hold chunks from several volumes (each with its own start stamp); we want the
+		// most recent, which is the max chunk timestamp (NOT the lexically-first/oldest key).
+		private async Task<DateTimeOffset?> NewestVolumeStartAsync(string siteId, int vol, CancellationToken ct)
+		{
+			var url = $"{ChunksBase}?list-type=2&max-keys=1000&prefix={Uri.EscapeDataString($"{siteId}/{vol}/")}";
+			var xml = await _http.GetStringAsync(url, ct);
+			DateTimeOffset? max = null;
+			foreach (var keyEl in XDocument.Parse(xml).Descendants(S3 + "Key"))
+			{
+				if (ParseChunkStart(keyEl.Value) is { } t && (max is null || t > max))
+				{
+					max = t;
+				}
+			}
+			return max;
+		}
+
+		// Lists all chunks in a volume folder as (key, seq, kind), e.g. (..., 2, 'I').
+		private async Task<List<(string key, int seq, char kind)>> ListChunkObjectsAsync(string siteId, string vol, CancellationToken ct)
+		{
+			var prefix = $"{siteId}/{vol}/";
+			var list = new List<(string, int, char)>();
+			string? continuation = null;
+
+			do
+			{
+				var url = $"{ChunksBase}?list-type=2&prefix={Uri.EscapeDataString(prefix)}&max-keys=1000";
+				if (continuation is not null)
+				{
+					url += $"&continuation-token={Uri.EscapeDataString(continuation)}";
+				}
+
+				var xml = await _http.GetStringAsync(url, ct);
+				var doc = XDocument.Parse(xml);
+				foreach (var keyEl in doc.Descendants(S3 + "Key"))
+				{
+					if (ParseChunkSeqKind(keyEl.Value) is { } pk)
+					{
+						list.Add((keyEl.Value, pk.seq, pk.kind));
+					}
+				}
+
+				continuation = doc.Root?.Element(S3 + "IsTruncated")?.Value == "true"
+					? doc.Root?.Element(S3 + "NextContinuationToken")?.Value
+					: null;
+			}
+			while (continuation is not null);
+
+			return list;
+		}
+
+		// Chunk key tail is "<yyyyMMdd>-<HHmmss>-<seq>-<S|I|E>", e.g. "20260614-235853-001-S".
+		private static DateTimeOffset? ParseChunkStart(string key)
+		{
+			var name = key.Substring(key.LastIndexOf('/') + 1);
+			if (name.Length < 15)
+			{
+				return null;
+			}
+
+			return DateTimeOffset.TryParseExact(
+				name.Substring(0, 15), "yyyyMMdd-HHmmss", CultureInfo.InvariantCulture,
+				DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var t)
+				? t
+				: null;
+		}
+
+		private static (int seq, char kind)? ParseChunkSeqKind(string key)
+		{
+			var name = key.Substring(key.LastIndexOf('/') + 1);
+			var parts = name.Split('-');
+			if (parts.Length < 4 || !int.TryParse(parts[2], out var seq) || parts[3].Length == 0)
+			{
+				return null;
+			}
+
+			return (seq, parts[3][0]);
+		}
+
 		private string CacheFileFor(string siteId, DateTimeOffset time) =>
 			Path.Combine(CacheDirectory, $"{siteId}_{time:yyyyMMdd_HHmmss}.V06");
 
 		private static string LocalUrlFor(string siteId, DateTimeOffset time) =>
 			$"https://{CacheHostName}/{siteId}_{time:yyyyMMdd_HHmmss}.V06";
 
+		// Live (chunks) frames get a "_live_" infix so they're served from the same host but
+		// never confused with archive loop frames (and skipped by the archive prune below).
+		private string LiveCacheFileFor(string siteId, DateTimeOffset time) =>
+			Path.Combine(CacheDirectory, $"{siteId}_live_{time:yyyyMMdd_HHmmss}.V06");
+
+		private static string LiveUrlFor(string siteId, DateTimeOffset time) =>
+			$"https://{CacheHostName}/{siteId}_live_{time:yyyyMMdd_HHmmss}.V06";
+
 		// Deletes this site's cached volumes that aren't in the current keep-set (keyed by the
-		// timestamp embedded in each key), so the loop cache doesn't grow without bound.
+		// timestamp embedded in each key), so the loop cache doesn't grow without bound. Live
+		// frames are pruned separately (PruneLiveCache) and excluded here.
 		private void PruneCache(string siteId, IReadOnlyList<string> keepKeys)
 		{
 			try
@@ -129,6 +639,10 @@ namespace OfflineMapsTest.Services
 
 				foreach (var file in Directory.EnumerateFiles(CacheDirectory, $"{siteId}_*.V06"))
 				{
+					if (file.Contains("_live_", StringComparison.OrdinalIgnoreCase))
+					{
+						continue; // owned by PruneLiveCache
+					}
 					if (!keep.Contains(file))
 					{
 						try { File.Delete(file); } catch { /* best effort */ }
@@ -138,6 +652,25 @@ namespace OfflineMapsTest.Services
 			catch
 			{
 				// Pruning is an optimization; failing to prune is non-fatal.
+			}
+		}
+
+		// Keeps only the newest live frame for a site (best effort).
+		private void PruneLiveCache(string siteId, string keepFile)
+		{
+			try
+			{
+				foreach (var file in Directory.EnumerateFiles(CacheDirectory, $"{siteId}_live_*.V06"))
+				{
+					if (!string.Equals(file, keepFile, StringComparison.OrdinalIgnoreCase))
+					{
+						try { File.Delete(file); } catch { /* best effort */ }
+					}
+				}
+			}
+			catch
+			{
+				// Non-fatal.
 			}
 		}
 
@@ -178,12 +711,77 @@ namespace OfflineMapsTest.Services
 			return keys;
 		}
 
+		public async Task<IReadOnlyCollection<string>> GetLiveSiteIdsAsync(CancellationToken cancellationToken = default)
+		{
+			var now = DateTimeOffset.UtcNow;
+			var live = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+			// today + yesterday so a site isn't falsely flagged offline in the first minutes of
+			// the UTC day (when today's prefix is still nearly empty for everyone).
+			foreach (var day in new[] { now, now.AddDays(-1) })
+			{
+				try
+				{
+					await AddSitesForDayAsync(day, live, cancellationToken);
+				}
+				catch (OperationCanceledException)
+				{
+					throw;
+				}
+				catch
+				{
+					// Best effort: a failed listing just leaves those sites unflagged.
+				}
+			}
+			return live;
+		}
+
+		// Adds every site that has any data under <y>/<m>/<d>/ to the set, via a single
+		// delimited listing whose CommonPrefixes are <y>/<m>/<d>/<SITE>/ (one request/day).
+		private async Task AddSitesForDayAsync(DateTimeOffset day, HashSet<string> into, CancellationToken ct)
+		{
+			var prefix = $"{day:yyyy/MM/dd}/";
+			string? continuation = null;
+
+			do
+			{
+				var url = $"{BucketBase}?list-type=2&delimiter=%2F&prefix={Uri.EscapeDataString(prefix)}&max-keys=1000";
+				if (continuation is not null)
+				{
+					url += $"&continuation-token={Uri.EscapeDataString(continuation)}";
+				}
+
+				var xml = await _http.GetStringAsync(url, ct);
+				var doc = XDocument.Parse(xml);
+				foreach (var cp in doc.Descendants(S3 + "CommonPrefixes"))
+				{
+					var parts = cp.Element(S3 + "Prefix")?.Value?.TrimEnd('/').Split('/'); // "2026/06/15/KLIX/"
+					if (parts is { Length: 4 })
+					{
+						into.Add(parts[3]);
+					}
+				}
+
+				continuation = doc.Root?.Element(S3 + "IsTruncated")?.Value == "true"
+					? doc.Root?.Element(S3 + "NextContinuationToken")?.Value
+					: null;
+			}
+			while (continuation is not null);
+		}
+
 		// Builds a minimal uncompressed volume containing ONLY the lowest elevation's records.
 		// See the design notes in the previous revision: 24-byte header + decompressed LDM
 		// records up to the first elevation-2 record (records align to elevations, lowest
 		// first). Returns null if nothing parses (caller caches the raw bytes).
-		private static byte[]? TryExtractLowestTilt(byte[] raw, string siteId)
+		private static byte[]? TryExtractLowestTilt(byte[] raw, string siteId) =>
+			TryExtractLowestTilt(raw, siteId, out _);
+
+		// As above, but also reports whether the lowest tilt is definitely COMPLETE — i.e. we
+		// reached the first elevation-2 record. The chunks path uses this to tell a finished
+		// tilt 1 (serve it) from one still mid-scan in an in-progress volume (wait / fall back).
+		// The archive path always sees a full volume, so the flag is true there.
+		private static byte[]? TryExtractLowestTilt(byte[] raw, string siteId, out bool completedTilt)
 		{
+			completedTilt = false;
 			const int headerSize = 24;
 			if (raw.Length < headerSize + 4)
 			{
@@ -196,6 +794,7 @@ namespace OfflineMapsTest.Services
 
 			var pos = headerSize;
 			var records = 0;
+			var inTilt1 = false; // have we reached the first real 0.5° radial yet?
 			while (pos + 4 <= raw.Length)
 			{
 				var controlWord = (raw[pos] << 24) | (raw[pos + 1] << 16) | (raw[pos + 2] << 8) | raw[pos + 3];
@@ -207,17 +806,34 @@ namespace OfflineMapsTest.Services
 				}
 
 				byte[] block;
-				using (var blockIn = new MemoryStream(raw, pos, size, writable: false))
-				using (var bz = new BZip2Stream(blockIn, CompressionMode.Decompress, false))
-				using (var blockOut = new MemoryStream(1024 * 1024))
+				try
 				{
+					using var blockIn = new MemoryStream(raw, pos, size, writable: false);
+					using var bz = new BZip2Stream(blockIn, CompressionMode.Decompress, false);
+					using var blockOut = new MemoryStream(1024 * 1024);
 					bz.CopyTo(blockOut);
 					block = blockOut.ToArray();
 				}
+				catch
+				{
+					break; // a malformed record: stop and serve what we have rather than failing
+				}
 				pos += size;
 
-				if (ElevationOf(block, icao) >= 2)
+				var elev = ElevationOf(block, icao);
+				if (elev == 1)
 				{
+					inTilt1 = true;
+				}
+
+				// Only treat elevation >= 2 as "past the lowest tilt" once we've actually entered
+				// it. The leading metadata record can contain the ICAO string at an offset whose
+				// byte-22 reads as a bogus elevation; without this guard that aborted the whole
+				// extraction (records == 0 -> null -> the caller cached the raw ~86 MB volume,
+				// which the JS then bzip2-decoded every frame — the KFDX ~7 s/frame bug).
+				if (inTilt1 && elev >= 2)
+				{
+					completedTilt = true; // crossed into elevation 2 -> tilt 1 fully scanned
 					break;
 				}
 
@@ -231,7 +847,16 @@ namespace OfflineMapsTest.Services
 		private static int ElevationOf(byte[] block, byte[] icao)
 		{
 			var i = IndexOf(block, icao);
-			return (i >= 0 && i + 22 < block.Length) ? block[i + 22] : 0;
+			if (i < 0 || i + 22 >= block.Length)
+			{
+				return 0;
+			}
+
+			// Elevation number is a 1-based index into the VCP's elevation list (1..~25). Anything
+			// outside a plausible range is a false ICAO match inside non-radial (metadata) data, so
+			// report 0 ("not a radial") rather than a bogus tilt boundary.
+			var elev = block[i + 22];
+			return elev is >= 1 and <= 32 ? elev : 0;
 		}
 
 		private static int IndexOf(byte[] haystack, byte[] needle)

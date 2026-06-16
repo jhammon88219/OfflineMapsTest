@@ -8,13 +8,14 @@ self.onmessage = function (e) {
     }).then(function (res) {
         const g = res.geom;
         if (!g) {
-            self.postMessage({ token: d.token, index: d.index, empty: true, decodeMs: res.decodeMs, buildMs: res.buildMs });
+            self.postMessage({ token: d.token, index: d.index, empty: true, decodeMs: res.decodeMs, buildMs: res.buildMs, radials: res.radials, gates: res.gates, bytes: res.bytes });
             return;
         }
         self.postMessage(
             {
                 token: d.token, index: d.index, positions: g.positions, colors: g.colors,
                 count: g.count, decodeMs: res.decodeMs, buildMs: res.buildMs,
+                radials: res.radials, gates: res.gates, bytes: res.bytes,
             },
             [g.positions.buffer, g.colors.buffer] // zero-copy transfer
         );
