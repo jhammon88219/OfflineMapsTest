@@ -7,307 +7,319 @@
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     xmlns:controls="using:Microsoft.UI.Xaml.Controls"
+    xmlns:models="using:OfflineMapsTest.Models"
     mc:Ignorable="d"
     Title="OfflineMapsTest">
 
     <Grid Background="#FF0A0A0A">
-        <!-- The main, full-window map. -->
+        <!-- A "tool window" card style: a margin-separated, rounded, bordered card on the dock
+             backdrop. The border highlights to the system accent when the card holds focus (see
+             OnCardGotFocus). A matching caption-bar style sits at the top of each card. (Resources
+             live on the Grid — WinUI 3 Window has no Window.Resources.) -->
+        <Grid.Resources>
+            <Style x:Key="ToolCardStyle" TargetType="Border">
+                <Setter Property="Margin" Value="5"/>
+                <Setter Property="CornerRadius" Value="6"/>
+                <Setter Property="BorderThickness" Value="1"/>
+                <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}"/>
+                <!-- Opaque (the station behind is transparent, so a low-alpha card fill like
+                     CardBackgroundFillColorDefaultBrush would let the map show through the cards). -->
+                <Setter Property="Background" Value="{ThemeResource SolidBackgroundFillColorBaseBrush}"/>
+            </Style>
+            <Style x:Key="ToolCaptionStyle" TargetType="Grid">
+                <Setter Property="Padding" Value="10,5"/>
+                <Setter Property="CornerRadius" Value="5,5,0,0"/>
+                <Setter Property="Background" Value="{ThemeResource SubtleFillColorSecondaryBrush}"/>
+                <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}"/>
+                <Setter Property="BorderThickness" Value="0,0,0,1"/>
+            </Style>
+        </Grid.Resources>
+
+        <!-- Full-window map (bottom layer; all UI overlays float on top of it). -->
         <controls:WebView2 x:Name="MainMapWebView"/>
 
-        <!-- Control ribbon: an opaque themed bar at the bottom hosting the outlook +
-             basemap selectors and a collapse button. -->
-        <Border x:Name="Ribbon"
-                VerticalAlignment="Bottom"
-                Background="{ThemeResource SolidBackgroundFillColorBaseBrush}"
-                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                BorderThickness="0,1,0,0"
-                Padding="12"
-                Visibility="{x:Bind VisibleWhen(ViewModel.IsRibbonExpanded), Mode=OneWay}">
-            <StackPanel Spacing="6">
+        <!-- ============================================================================
+             LEFT tool-window dock — four margin-separated tool-window cards. Collapses to
+             the "Tools" reveal button. Each card's border highlights to the accent on focus.
+             ============================================================================ -->
+        <Border HorizontalAlignment="Left" VerticalAlignment="Stretch" Width="300"
+                Background="Transparent" BorderThickness="0"
+                Visibility="{x:Bind VisibleWhen(ViewModel.IsDockExpanded), Mode=OneWay}">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
 
-                <!-- Radar loop controls: play/pause + frame scrubber + frame time, centered as a
-                     fixed-width group. Shown only when a radar site is selected; enabled once all
-                     frames load. -->
-                <StackPanel Orientation="Horizontal"
-                            HorizontalAlignment="Center"
-                            Spacing="8"
-                            Visibility="{x:Bind VisibleWhen(ViewModel.HasRadarLoop), Mode=OneWay}">
-                    <Button Padding="10,6"
-                            VerticalAlignment="Center"
-                            ToolTipService.ToolTip="Play / pause loop"
-                            IsEnabled="{x:Bind ViewModel.IsLoopReady, Mode=OneWay}"
-                            Click="OnTogglePlayClick">
-                        <FontIcon Glyph="{x:Bind ViewModel.PlayPauseGlyph, Mode=OneWay}" FontSize="14"/>
-                    </Button>
-                    <Slider Width="360"
-                            VerticalAlignment="Center"
-                            Minimum="0"
-                            Maximum="{x:Bind ViewModel.MaxFrameIndex, Mode=OneWay}"
-                            StepFrequency="1"
-                            IsEnabled="{x:Bind ViewModel.IsLoopReady, Mode=OneWay}"
-                            Value="{x:Bind ViewModel.CurrentFrameIndex, Mode=TwoWay}"/>
-                    <TextBlock VerticalAlignment="Center"
-                               MinWidth="110"
-                               TextAlignment="Right"
-                               Text="{x:Bind ViewModel.CurrentFrameTimeText, Mode=OneWay}"/>
-                </StackPanel>
-
-                <!-- Authoritative issued/valid times for the loaded outlook (from its
-                     GeoJSON). Hidden when no outlook / no times are available. -->
-                <TextBlock Text="{x:Bind ViewModel.OutlookTimesText, Mode=OneWay}"
-                           Visibility="{x:Bind VisibleWhen(ViewModel.HasOutlookTimes), Mode=OneWay}"
-                           Opacity="0.8"
-                           FontSize="12"
-                           Margin="2,0,0,2"/>
-
-                <Grid ColumnSpacing="12">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-
-                <!-- Radar layer opacity (sites are picked by clicking the on-map markers). -->
-                <Slider Grid.Column="0"
-                        Width="110"
-                        VerticalAlignment="Bottom"
-                        Header="Radar Opacity"
-                        Minimum="0"
-                        Maximum="1"
-                        StepFrequency="0.05"
-                        SmallChange="0.05"
-                        Value="{x:Bind ViewModel.RadarOpacity, Mode=TwoWay}"/>
-
-                <!-- SPC outlook day selector. -->
-                <ComboBox Grid.Column="1"
-                          MinWidth="140"
-                          VerticalAlignment="Bottom"
-                          Header="Day"
-                          ItemsSource="{x:Bind ViewModel.Days}"
-                          SelectedItem="{x:Bind ViewModel.SelectedDayOption, Mode=TwoWay}"
-                          DisplayMemberPath="Label"/>
-
-                <!-- SPC outlook product — items cascade to the selected day; the
-                     leading "None" entry clears the overlay. -->
-                <ComboBox Grid.Column="2"
-                          MinWidth="130"
-                          VerticalAlignment="Bottom"
-                          Header="Outlook"
-                          ItemsSource="{x:Bind ViewModel.ProductOptions, Mode=OneWay}"
-                          SelectedItem="{x:Bind ViewModel.SelectedOption, Mode=TwoWay}"
-                          DisplayMemberPath="Label"/>
-
-                <!-- Outlook fill opacity. Outlines stay opaque, so lowering this lets
-                     the basemap and its borders read through the polygon fill. -->
-                <Slider Grid.Column="3"
-                        Width="110"
-                        VerticalAlignment="Bottom"
-                        Header="Opacity"
-                        Minimum="0"
-                        Maximum="1"
-                        StepFrequency="0.05"
-                        SmallChange="0.05"
-                        Value="{x:Bind ViewModel.OutlookOpacity, Mode=TwoWay}"/>
-
-                <!-- Basemap style switcher. -->
-                <ComboBox Grid.Column="4"
-                          MinWidth="150"
-                          VerticalAlignment="Bottom"
-                          Header="Basemap"
-                          ItemsSource="{x:Bind ViewModel.AvailableStyles}"
-                          SelectedItem="{x:Bind ViewModel.SelectedStyle, Mode=TwoWay}"
-                          DisplayMemberPath="DisplayName"/>
-
-                <!-- Show/hide all radar site marker buttons. Independent of the radar layer. -->
-                <Button Grid.Column="5"
-                        VerticalAlignment="Bottom"
-                        Padding="10,8"
-                        Content="{x:Bind ViewModel.RadarSitesToggleLabel, Mode=OneWay}"
-                        ToolTipService.ToolTip="Show or hide the radar site buttons (does not hide active radar)"
-                        Click="OnToggleRadarSitesClick"/>
-
-                <!-- Collapse the whole ribbon. -->
-                <Button Grid.Column="7"
-                        VerticalAlignment="Bottom"
-                        Padding="10,8"
-                        ToolTipService.ToolTip="Hide controls"
-                        Click="OnCollapseRibbonClick">
-                    <FontIcon Glyph="&#xE70D;" FontSize="12"/>
-                </Button>
-                </Grid>
-            </StackPanel>
-        </Border>
-
-        <!-- Reveal handle: shown bottom-center only while the ribbon is collapsed, to
-             bring the controls back. Opaque themed Border keeps it legible. -->
-        <Border HorizontalAlignment="Center"
-                VerticalAlignment="Bottom"
-                Margin="0,0,0,12"
-                CornerRadius="8"
-                Background="{ThemeResource SolidBackgroundFillColorBaseBrush}"
-                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                BorderThickness="1"
-                Visibility="{x:Bind VisibleWhen(ViewModel.IsRibbonCollapsed), Mode=OneWay}">
-            <Button Background="Transparent"
-                    BorderThickness="0"
-                    CornerRadius="6"
-                    Padding="12,6"
-                    Click="OnRevealRibbonClick">
-                <StackPanel Orientation="Horizontal" Spacing="6">
-                    <FontIcon Glyph="&#xE70E;" FontSize="12"/>
-                    <TextBlock Text="Controls"/>
-                </StackPanel>
-            </Button>
-        </Border>
-
-        <!-- Selected radar site card (lower-left). Shown only while a radar loop is active;
-             floats above the ribbon. Uses the same theme brushes as the ribbon
-             (SolidBackgroundFillColorBaseBrush / CardStrokeColorDefaultBrush + the standard
-             text-fill brushes) so the two panels match. The status dot keeps its semantic
-             Live/Recent/Stale colors. Polished site readout up top; the full developer
-             diagnostics + event log live in the collapsible "Diagnostics" expander. -->
-        <Border HorizontalAlignment="Left"
-                VerticalAlignment="Bottom"
-                Margin="14,0,0,150"
-                MinWidth="270"
-                MaxWidth="380"
-                CornerRadius="8"
-                Padding="16,14"
-                Background="{ThemeResource SolidBackgroundFillColorBaseBrush}"
-                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                BorderThickness="1"
-                Visibility="{x:Bind VisibleWhen(ViewModel.HasRadarLoop), Mode=OneWay}">
-            <StackPanel Spacing="12">
-
-                <!-- Header: status dot + site title -->
-                <StackPanel Orientation="Horizontal" Spacing="9">
-                    <Ellipse Width="10" Height="10" VerticalAlignment="Center"
-                             Fill="{x:Bind RadarDotBrush(ViewModel.RadarStatus), Mode=OneWay}"/>
-                    <StackPanel>
-                        <TextBlock Text="{x:Bind ViewModel.RadarCardTitle, Mode=OneWay}"
-                                   FontSize="16" FontWeight="SemiBold"
-                                   Foreground="{ThemeResource TextFillColorPrimaryBrush}"/>
-                        <TextBlock Text="{x:Bind ViewModel.RadarCardCoords, Mode=OneWay}"
-                                   FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-                    </StackPanel>
-                </StackPanel>
-
-                <!-- Headline: current frame time + frame detail -->
-                <StackPanel Spacing="1">
-                    <TextBlock Text="{x:Bind ViewModel.RadarCardTime, Mode=OneWay}"
-                               FontSize="28" FontWeight="Bold"
+                <!-- Dock title bar + collapse (transparent — the pane shows the map through). -->
+                <Grid Grid.Row="0" Padding="12,8">
+                    <TextBlock Text="Tools" FontSize="13" FontWeight="SemiBold" VerticalAlignment="Center"
                                Foreground="{ThemeResource TextFillColorPrimaryBrush}"/>
-                    <TextBlock Text="{x:Bind ViewModel.RadarFrameDetail, Mode=OneWay}"
-                               FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-                </StackPanel>
+                    <Button HorizontalAlignment="Right" Background="Transparent" BorderThickness="0"
+                            Padding="6,2" ToolTipService.ToolTip="Collapse tools" Click="OnToggleDockClick">
+                        <FontIcon Glyph="&#xE76B;" FontSize="12"/>
+                    </Button>
+                </Grid>
 
-                <!-- Facts: mode / data age / loop span -->
-                <StackPanel Spacing="6">
-                    <StackPanel Orientation="Horizontal" Spacing="10">
-                        <TextBlock Text="Mode" Width="46" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-                        <TextBlock Text="{x:Bind ViewModel.RadarModeText, Mode=OneWay}"
-                                   FontSize="12" Foreground="{ThemeResource TextFillColorPrimaryBrush}" TextWrapping="Wrap"/>
-                    </StackPanel>
-                    <StackPanel Orientation="Horizontal" Spacing="10">
-                        <TextBlock Text="Updated" Width="46" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-                        <TextBlock Text="{x:Bind ViewModel.RadarAgeText, Mode=OneWay}"
-                                   FontSize="12" Foreground="{ThemeResource TextFillColorPrimaryBrush}"/>
-                    </StackPanel>
-                    <StackPanel Orientation="Horizontal" Spacing="10">
-                        <TextBlock Text="Loop" Width="46" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-                        <TextBlock Text="{x:Bind ViewModel.RadarLoopSpanText, Mode=OneWay}"
-                                   FontSize="12" Foreground="{ThemeResource TextFillColorPrimaryBrush}"/>
-                    </StackPanel>
-                </StackPanel>
+                <!-- Four tool-window cards, equal vertical quarters -->
+                <Grid Grid.Row="1">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
 
-                <!-- Collapsible developer diagnostics + event log -->
-                <Expander Header="Diagnostics"
-                          ExpandDirection="Down"
-                          HorizontalAlignment="Stretch"
-                          HorizontalContentAlignment="Stretch"
-                          Padding="0"
-                          Background="Transparent"
-                          BorderThickness="0">
-                    <StackPanel Spacing="8">
-                        <TextBlock Text="{x:Bind ViewModel.RadarDebugText, Mode=OneWay}"
-                                   FontFamily="Cascadia Mono, Consolas"
-                                   FontSize="12"
-                                   LineHeight="18"
-                                   Foreground="{ThemeResource TextFillColorPrimaryBrush}"
-                                   IsTextSelectionEnabled="True"
-                                   TextWrapping="Wrap"/>
-                        <StackPanel Orientation="Horizontal" Spacing="6">
-                            <Button Content="Copy debug log"
-                                    Padding="8,3"
-                                    FontSize="11"
-                                    Click="OnCopyRadarDebugClick"/>
-                            <Button Content="Clear"
-                                    Padding="8,3"
-                                    FontSize="11"
-                                    Click="OnClearRadarDebugClick"/>
-                            <TextBlock x:Name="RadarDebugStatus"
-                                       VerticalAlignment="Center"
-                                       FontSize="11"
-                                       Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
-                        </StackPanel>
-                    </StackPanel>
-                </Expander>
-            </StackPanel>
+                    <!-- TW1: Radar Sites -->
+                    <Border Grid.Row="0" Style="{StaticResource ToolCardStyle}" GotFocus="OnCardGotFocus">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+                            <Grid Grid.Row="0" Style="{StaticResource ToolCaptionStyle}">
+                                <TextBlock Text="Radar Sites" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center"
+                                           Foreground="{ThemeResource TextFillColorPrimaryBrush}"/>
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" VerticalAlignment="Center">
+                                    <FontIcon Glyph="&#xE712;" FontSize="11" Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                                    <FontIcon Glyph="&#xE718;" FontSize="11" Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                                    <FontIcon Glyph="&#xE711;" FontSize="11" Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                                </StackPanel>
+                            </Grid>
+                            <ListView Grid.Row="1" Background="Transparent"
+                                      ItemsSource="{x:Bind ViewModel.RadarSites}"
+                                      IsItemClickEnabled="True" ItemClick="OnRadarSiteListItemClick" SelectionMode="None">
+                                <ListView.ItemTemplate>
+                                    <DataTemplate x:DataType="models:RadarSite">
+                                        <StackPanel Padding="0,2">
+                                            <TextBlock Text="{x:Bind Id}" FontSize="12" FontWeight="SemiBold"
+                                                       Foreground="{ThemeResource TextFillColorPrimaryBrush}"/>
+                                            <TextBlock Text="{x:Bind Name}" FontSize="11"
+                                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ListView.ItemTemplate>
+                            </ListView>
+                        </Grid>
+                    </Border>
+
+                    <!-- TW2: Radar Loop -->
+                    <Border Grid.Row="1" Style="{StaticResource ToolCardStyle}" GotFocus="OnCardGotFocus">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+                            <Grid Grid.Row="0" Style="{StaticResource ToolCaptionStyle}">
+                                <TextBlock Text="Radar Loop" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center"
+                                           Foreground="{ThemeResource TextFillColorPrimaryBrush}"/>
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" VerticalAlignment="Center">
+                                    <FontIcon Glyph="&#xE712;" FontSize="11" Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                                    <FontIcon Glyph="&#xE718;" FontSize="11" Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                                    <FontIcon Glyph="&#xE711;" FontSize="11" Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                                </StackPanel>
+                            </Grid>
+                            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                                <StackPanel Padding="10,8" Spacing="8">
+                                    <StackPanel Orientation="Horizontal" Spacing="6">
+                                        <Button Padding="9,5" IsEnabled="{x:Bind ViewModel.IsLoopReady, Mode=OneWay}"
+                                                ToolTipService.ToolTip="Play / pause" Click="OnTogglePlayClick">
+                                            <FontIcon Glyph="{x:Bind ViewModel.PlayPauseGlyph, Mode=OneWay}" FontSize="13"/>
+                                        </Button>
+                                        <Button Padding="9,5" IsEnabled="False" ToolTipService.ToolTip="Stop (not wired)">
+                                            <FontIcon Glyph="&#xE71A;" FontSize="13"/>
+                                        </Button>
+                                        <TextBlock VerticalAlignment="Center" Margin="4,0,0,0"
+                                                   Text="{x:Bind ViewModel.CurrentFrameTimeText, Mode=OneWay}"
+                                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                                    </StackPanel>
+                                    <Slider Minimum="0" Maximum="{x:Bind ViewModel.MaxFrameIndex, Mode=OneWay}"
+                                            StepFrequency="1" IsEnabled="{x:Bind ViewModel.IsLoopReady, Mode=OneWay}"
+                                            Value="{x:Bind ViewModel.CurrentFrameIndex, Mode=TwoWay}"/>
+                                    <ComboBox Header="Product" HorizontalAlignment="Stretch"
+                                              SelectedIndex="{x:Bind ViewModel.RadarProductIndex, Mode=TwoWay}">
+                                        <ComboBoxItem>Reflectivity</ComboBoxItem>
+                                        <ComboBoxItem>Velocity</ComboBoxItem>
+                                    </ComboBox>
+                                    <ComboBox Header="Tilt" HorizontalAlignment="Stretch" IsEnabled="False" SelectedIndex="0">
+                                        <ComboBoxItem>0.5°</ComboBoxItem>
+                                    </ComboBox>
+                                    <Slider Header="Radar Opacity" Minimum="0" Maximum="1" StepFrequency="0.05"
+                                            Value="{x:Bind ViewModel.RadarOpacity, Mode=TwoWay}"/>
+                                    <Button HorizontalAlignment="Stretch"
+                                            Content="{x:Bind ViewModel.RadarSitesToggleLabel, Mode=OneWay}"
+                                            ToolTipService.ToolTip="Show or hide the on-map site markers"
+                                            Click="OnToggleRadarSitesClick"/>
+                                </StackPanel>
+                            </ScrollViewer>
+                        </Grid>
+                    </Border>
+
+                    <!-- TW3: Outlook -->
+                    <Border Grid.Row="2" Style="{StaticResource ToolCardStyle}" GotFocus="OnCardGotFocus">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+                            <Grid Grid.Row="0" Style="{StaticResource ToolCaptionStyle}">
+                                <TextBlock Text="Outlook" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center"
+                                           Foreground="{ThemeResource TextFillColorPrimaryBrush}"/>
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" VerticalAlignment="Center">
+                                    <FontIcon Glyph="&#xE712;" FontSize="11" Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                                    <FontIcon Glyph="&#xE718;" FontSize="11" Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                                    <FontIcon Glyph="&#xE711;" FontSize="11" Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                                </StackPanel>
+                            </Grid>
+                            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                                <StackPanel Padding="10,8" Spacing="8">
+                                    <ComboBox Header="Day" HorizontalAlignment="Stretch"
+                                              ItemsSource="{x:Bind ViewModel.Days}"
+                                              SelectedItem="{x:Bind ViewModel.SelectedDayOption, Mode=TwoWay}"
+                                              DisplayMemberPath="Label"/>
+                                    <ComboBox Header="Outlook" HorizontalAlignment="Stretch"
+                                              ItemsSource="{x:Bind ViewModel.ProductOptions, Mode=OneWay}"
+                                              SelectedItem="{x:Bind ViewModel.SelectedOption, Mode=TwoWay}"
+                                              DisplayMemberPath="Label"/>
+                                    <Slider Header="Opacity" Minimum="0" Maximum="1" StepFrequency="0.05"
+                                            Value="{x:Bind ViewModel.OutlookOpacity, Mode=TwoWay}"/>
+                                    <ComboBox Header="Basemap" HorizontalAlignment="Stretch"
+                                              ItemsSource="{x:Bind ViewModel.AvailableStyles}"
+                                              SelectedItem="{x:Bind ViewModel.SelectedStyle, Mode=TwoWay}"
+                                              DisplayMemberPath="DisplayName"/>
+                                </StackPanel>
+                            </ScrollViewer>
+                        </Grid>
+                    </Border>
+
+                    <!-- TW4: Outlook Details -->
+                    <Border Grid.Row="3" Style="{StaticResource ToolCardStyle}" GotFocus="OnCardGotFocus">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+                            <Grid Grid.Row="0" Style="{StaticResource ToolCaptionStyle}">
+                                <TextBlock Text="Outlook Details" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center"
+                                           Foreground="{ThemeResource TextFillColorPrimaryBrush}"/>
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" VerticalAlignment="Center">
+                                    <FontIcon Glyph="&#xE712;" FontSize="11" Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                                    <FontIcon Glyph="&#xE718;" FontSize="11" Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                                    <FontIcon Glyph="&#xE711;" FontSize="11" Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                                </StackPanel>
+                            </Grid>
+                            <Grid Grid.Row="1">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
+                                </Grid.RowDefinitions>
+                                <StackPanel Grid.Row="0" Padding="10,8" Spacing="5">
+                                    <TextBlock Text="{x:Bind ViewModel.OutlookCardTitle, Mode=OneWay}"
+                                               FontSize="13" FontWeight="SemiBold"
+                                               Foreground="{ThemeResource TextFillColorPrimaryBrush}"/>
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <TextBlock Text="Issued" Width="56" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                                        <TextBlock Text="{x:Bind ViewModel.OutlookIssuedText, Mode=OneWay}"
+                                                   FontSize="11" Foreground="{ThemeResource TextFillColorPrimaryBrush}"/>
+                                    </StackPanel>
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <TextBlock Text="Effective" Width="56" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                                        <TextBlock Text="{x:Bind ViewModel.OutlookValidText, Mode=OneWay}"
+                                                   FontSize="11" Foreground="{ThemeResource TextFillColorPrimaryBrush}" TextWrapping="Wrap"/>
+                                    </StackPanel>
+                                </StackPanel>
+                                <ScrollViewer Grid.Row="1" Padding="10,2,10,8"
+                                              VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                                    <TextBlock Text="{x:Bind ViewModel.OutlookNarrativeText, Mode=OneWay}"
+                                               FontFamily="Cascadia Mono, Consolas" FontSize="11" LineHeight="16"
+                                               Foreground="{ThemeResource TextFillColorPrimaryBrush}"
+                                               IsTextSelectionEnabled="True" TextWrapping="Wrap"/>
+                                </ScrollViewer>
+                            </Grid>
+                        </Grid>
+                    </Border>
+                </Grid>
+            </Grid>
         </Border>
 
-        <!-- SPC outlook info card (top-right). Shown while an outlook (not "None") is selected.
-             Same theme brushes as the ribbon/radar card. Header + issued/effective times +
-             the SPC forecast discussion (monospace, scrollable). -->
-        <Border HorizontalAlignment="Right"
-                VerticalAlignment="Top"
-                Margin="0,14,14,0"
-                MinWidth="320"
-                MaxWidth="480"
-                CornerRadius="8"
-                Padding="16,14"
+        <!-- Reveal button: shown on the left edge only while the dock is collapsed. -->
+        <Button HorizontalAlignment="Left" VerticalAlignment="Top"
+                Margin="14,14,0,0" Padding="10,8" CornerRadius="8"
                 Background="{ThemeResource SolidBackgroundFillColorBaseBrush}"
-                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                BorderThickness="1"
-                Visibility="{x:Bind VisibleWhen(ViewModel.HasOutlookCard), Mode=OneWay}">
-            <StackPanel Spacing="12">
-
-                <!-- Header -->
-                <TextBlock Text="{x:Bind ViewModel.OutlookCardTitle, Mode=OneWay}"
-                           FontSize="16" FontWeight="SemiBold"
-                           Foreground="{ThemeResource TextFillColorPrimaryBrush}"/>
-
-                <!-- Issued / effective -->
-                <StackPanel Spacing="6">
-                    <StackPanel Orientation="Horizontal" Spacing="10">
-                        <TextBlock Text="Issued" Width="64" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-                        <TextBlock Text="{x:Bind ViewModel.OutlookIssuedText, Mode=OneWay}"
-                                   FontSize="12" Foreground="{ThemeResource TextFillColorPrimaryBrush}"/>
-                    </StackPanel>
-                    <StackPanel Orientation="Horizontal" Spacing="10">
-                        <TextBlock Text="Effective" Width="64" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-                        <TextBlock Text="{x:Bind ViewModel.OutlookValidText, Mode=OneWay}"
-                                   FontSize="12" Foreground="{ThemeResource TextFillColorPrimaryBrush}" TextWrapping="Wrap"/>
-                    </StackPanel>
-                </StackPanel>
-
-                <!-- SPC forecast discussion (scrollable; monospace preserves SPC's formatting) -->
-                <ScrollViewer MaxHeight="340"
-                              VerticalScrollBarVisibility="Auto"
-                              HorizontalScrollBarVisibility="Disabled">
-                    <TextBlock Text="{x:Bind ViewModel.OutlookNarrativeText, Mode=OneWay}"
-                               FontFamily="Cascadia Mono, Consolas"
-                               FontSize="12"
-                               LineHeight="17"
-                               Foreground="{ThemeResource TextFillColorPrimaryBrush}"
-                               IsTextSelectionEnabled="True"
-                               TextWrapping="Wrap"/>
-                </ScrollViewer>
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1"
+                ToolTipService.ToolTip="Show tools"
+                Visibility="{x:Bind VisibleWhen(ViewModel.IsDockCollapsed), Mode=OneWay}"
+                Click="OnToggleDockClick">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+                <FontIcon Glyph="&#xE76C;" FontSize="12"/>
+                <TextBlock Text="Tools"/>
             </StackPanel>
+        </Button>
+
+        <!-- ============================================================================
+             RIGHT tool-window dock — a single "Selected Site" tool-window card. With one
+             card it takes the full station height and its content is TOP-aligned (hugs the
+             top, empty below) — showcasing default top docking. Shown while a site is selected.
+             ============================================================================ -->
+        <Border HorizontalAlignment="Right" VerticalAlignment="Stretch" Width="300"
+                Background="Transparent" BorderThickness="0"
+                Visibility="{x:Bind VisibleWhen(ViewModel.HasRadarLoop), Mode=OneWay}">
+            <Border Style="{StaticResource ToolCardStyle}" GotFocus="OnCardGotFocus">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <Grid Grid.Row="0" Style="{StaticResource ToolCaptionStyle}">
+                        <TextBlock Text="Selected Site" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center"
+                                   Foreground="{ThemeResource TextFillColorPrimaryBrush}"/>
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" VerticalAlignment="Center">
+                            <FontIcon Glyph="&#xE712;" FontSize="11" Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                            <FontIcon Glyph="&#xE718;" FontSize="11" Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                            <FontIcon Glyph="&#xE711;" FontSize="11" Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                        </StackPanel>
+                    </Grid>
+                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                        <StackPanel VerticalAlignment="Top" Padding="16,14" Spacing="12">
+                            <StackPanel Orientation="Horizontal" Spacing="9">
+                                <Ellipse Width="10" Height="10" VerticalAlignment="Center"
+                                         Fill="{x:Bind RadarDotBrush(ViewModel.RadarStatus), Mode=OneWay}"/>
+                                <StackPanel>
+                                    <TextBlock Text="{x:Bind ViewModel.RadarCardTitle, Mode=OneWay}"
+                                               FontSize="16" FontWeight="SemiBold"
+                                               Foreground="{ThemeResource TextFillColorPrimaryBrush}"/>
+                                    <TextBlock Text="{x:Bind ViewModel.RadarCardCoords, Mode=OneWay}"
+                                               FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                                </StackPanel>
+                            </StackPanel>
+                            <StackPanel Spacing="1">
+                                <TextBlock Text="{x:Bind ViewModel.RadarCardTime, Mode=OneWay}"
+                                           FontSize="28" FontWeight="Bold"
+                                           Foreground="{ThemeResource TextFillColorPrimaryBrush}"/>
+                                <TextBlock Text="{x:Bind ViewModel.RadarFrameDetail, Mode=OneWay}"
+                                           FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                            </StackPanel>
+                            <StackPanel Spacing="6">
+                                <StackPanel Orientation="Horizontal" Spacing="10">
+                                    <TextBlock Text="Mode" Width="46" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                                    <TextBlock Text="{x:Bind ViewModel.RadarModeText, Mode=OneWay}"
+                                               FontSize="12" Foreground="{ThemeResource TextFillColorPrimaryBrush}" TextWrapping="Wrap"/>
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" Spacing="10">
+                                    <TextBlock Text="Updated" Width="46" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                                    <TextBlock Text="{x:Bind ViewModel.RadarAgeText, Mode=OneWay}"
+                                               FontSize="12" Foreground="{ThemeResource TextFillColorPrimaryBrush}"/>
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" Spacing="10">
+                                    <TextBlock Text="Loop" Width="46" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                                    <TextBlock Text="{x:Bind ViewModel.RadarLoopSpanText, Mode=OneWay}"
+                                               FontSize="12" Foreground="{ThemeResource TextFillColorPrimaryBrush}"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
+            </Border>
         </Border>
     </Grid>
 </Window>

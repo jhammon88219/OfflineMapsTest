@@ -227,16 +227,6 @@ namespace OfflineMapsTest
 			}
 		}
 
-		private void OnCollapseRibbonClick(object sender, RoutedEventArgs e)
-		{
-			ViewModel.IsRibbonCollapsed = true;
-		}
-
-		private void OnRevealRibbonClick(object sender, RoutedEventArgs e)
-		{
-			ViewModel.IsRibbonCollapsed = false;
-		}
-
 		private void OnTogglePlayClick(object sender, RoutedEventArgs e)
 		{
 			ViewModel.ToggleRadarPlay();
@@ -247,56 +237,62 @@ namespace OfflineMapsTest
 			ViewModel.ToggleRadarSitesVisible();
 		}
 
-		// Copies the full radar diagnostic timeline to the clipboard AND writes it to a file,
-		// so it survives if the clipboard is cleared. The file path is shown on the card.
-		private void OnCopyRadarDebugClick(object sender, RoutedEventArgs e)
+		// Left tool-window dock: collapse + reveal both just flip the dock state.
+		private void OnToggleDockClick(object sender, RoutedEventArgs e)
 		{
-			var report = BuildRadarReport();
-			try
-			{
-				var dp = new Windows.ApplicationModel.DataTransfer.DataPackage();
-				dp.SetText(report);
-				Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(dp);
-			}
-			catch (Exception ex)
-			{
-				System.Diagnostics.Debug.WriteLine($"[radar] clipboard failed: {ex.Message}");
-			}
-
-			string status;
-			try
-			{
-				var dir = Path.Combine(
-					Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-					"OfflineMapsTest", "RadarLevel2");
-				Directory.CreateDirectory(dir);
-				var path = Path.Combine(dir, $"radar-debug-{DateTime.Now:yyyyMMdd_HHmmss}.log");
-				File.WriteAllText(path, report);
-				status = $"copied + saved: {path}";
-			}
-			catch (Exception ex)
-			{
-				status = $"copied (file save failed: {ex.Message})";
-			}
-
-			RadarDebugStatus.Text = status;
+			ViewModel.ToggleDock();
 		}
 
-		private void OnClearRadarDebugClick(object sender, RoutedEventArgs e)
+		// Clicking a row in the dock's "Radar Sites" list selects that site (same path as
+		// clicking its on-map marker).
+		private void OnRadarSiteListItemClick(object sender, ItemClickEventArgs e)
 		{
-			Services.RadarDebugLog.Clear();
-			RadarDebugStatus.Text = "log cleared";
+			if (e.ClickedItem is RadarSite site)
+			{
+				ViewModel.OnRadarSiteClicked(site.Id);
+			}
 		}
 
-		// Full report = a small header + the entire event timeline.
-		private string BuildRadarReport()
+		// VS-style "active tool window" highlight: the card whose contents hold focus gets an
+		// accent border; the previously-active card reverts to the default stroke. GotFocus is a
+		// routed event, so it bubbles up from whichever control inside the card was focused. We
+		// don't clear on focus leaving to the map — the last-focused card stays highlighted, as VS does.
+		private Microsoft.UI.Xaml.Controls.Border? _activeToolCard;
+		private Microsoft.UI.Xaml.Media.Brush? _accentCardBrush;
+		private Microsoft.UI.Xaml.Media.Brush? _defaultCardBrush;
+
+		private void OnCardGotFocus(object sender, RoutedEventArgs e)
 		{
-			var header =
-				$"OfflineMapsTest radar debug report\n" +
-				$"generated: {DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss zzz} ({DateTimeOffset.UtcNow:HH:mm:ss}Z)\n" +
-				$"--- current state ---\n{ViewModel.RadarDebugText}\n" +
-				$"--- event timeline ({Services.RadarDebugLog.TotalCount} total) ---\n";
-			return header + Services.RadarDebugLog.Dump();
+			if (sender is not Microsoft.UI.Xaml.Controls.Border card || ReferenceEquals(card, _activeToolCard))
+			{
+				return;
+			}
+
+			// Capture the themed default stroke once (before we override any), and build the accent
+			// brush from the system accent color (with a safe fallback so a missing resource can't crash).
+			_defaultCardBrush ??= card.BorderBrush;
+			_accentCardBrush ??= new Microsoft.UI.Xaml.Media.SolidColorBrush(SystemAccentColor());
+
+			if (_activeToolCard is not null)
+			{
+				_activeToolCard.BorderBrush = _defaultCardBrush;
+			}
+			card.BorderBrush = _accentCardBrush;
+			_activeToolCard = card;
+		}
+
+		private static Windows.UI.Color SystemAccentColor()
+		{
+			try
+			{
+				if (Application.Current.Resources.ContainsKey("SystemAccentColor") &&
+					Application.Current.Resources["SystemAccentColor"] is Windows.UI.Color c)
+				{
+					return c;
+				}
+			}
+			catch { /* fall through */ }
+			return Windows.UI.Color.FromArgb(0xFF, 0x00, 0x78, 0xD4); // WinUI default accent
 		}
 
 		// x:Bind function mapping a bool to Visibility for the ribbon / reveal handle.

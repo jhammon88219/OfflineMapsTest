@@ -13,14 +13,18 @@
     const LAYER_ID = 'level2-radar';
     const MIN_DBZ = 10;
 
-    // frames[index] = { positions, colors, count } for a drawable frame, or { count: 0 } for
-    // an empty (no-echo) frame. currentFrame is the index being rendered.
+    // frames[index] = { positions, colors, count, velPositions, velColors, velCount }: the
+    // reflectivity AND velocity gate geometry (each with baked colors), so switching product is
+    // instant (no re-decode). count/velCount are 0 when that product has nothing to draw.
+    // currentFrame is the index being rendered.
     let frames = [];
     let currentFrame = -1;
+    let product = 'reflectivity'; // 'reflectivity' | 'velocity' — which moment to render
     let pendingFrame = -1;  // a frame requested via showFrame before it finished decoding; the
                             // decode that satisfies it promotes it to currentFrame (so showFrame
                             // never pins currentFrame to an undecoded index and blanks the layer).
     let uploadedFrame = -1; // which frame's geometry is currently in the GL buffers
+    let uploadedProduct = ''; // which product's geometry is uploaded (re-upload on a product switch)
     let siteLat = 0, siteLon = 0;
     let opacity = 0.85;
     let loopToken = 0;      // bumped per loop so stale async frames are dropped
@@ -109,9 +113,10 @@
             post({ type: 'radarFrameReady', index: res.index, hasData: false });
             return;
         }
-        frames[res.index] = res.empty
-            ? { count: 0 }
-            : { positions: res.positions, colors: res.colors, count: res.count };
+        frames[res.index] = {
+            positions: res.positions, colors: res.colors, count: res.count || 0,
+            velPositions: res.velPositions, velColors: res.velColors, velCount: res.velCount || 0,
+        };
         const ms = function (v) { return v == null ? '?' : v; };
         hostLog('decoded idx=' + res.index + ' ' + (res.empty ? 'EMPTY' : 'tris=' + res.count) +
             ' dec=' + ms(res.decodeMs) + 'ms bld=' + ms(res.buildMs) + 'ms rad=' + ms(res.radials) +
@@ -188,18 +193,24 @@
                 if (!program || currentFrame < 0) return;
                 const f = frames[currentFrame];
                 if (!f) { noteRenderIssue('no frame at cf=' + currentFrame, false); return; }
+                // Pick the geometry for the active product (reflectivity or velocity).
+                const vel = product === 'velocity';
+                const pos = vel ? f.velPositions : f.positions;
+                const col = vel ? f.velColors : f.colors;
+                const cnt = vel ? f.velCount : f.count;
                 try {
-                    // Upload this frame's geometry only when the current frame changed.
-                    if (uploadedFrame !== currentFrame) {
-                        if (f.positions) {
+                    // Re-upload when the frame OR the product changed.
+                    if (uploadedFrame !== currentFrame || uploadedProduct !== product) {
+                        if (pos && col) {
                             glc.bindBuffer(glc.ARRAY_BUFFER, posBuf);
-                            glc.bufferData(glc.ARRAY_BUFFER, f.positions, glc.STATIC_DRAW);
+                            glc.bufferData(glc.ARRAY_BUFFER, pos, glc.STATIC_DRAW);
                             glc.bindBuffer(glc.ARRAY_BUFFER, colorBuf);
-                            glc.bufferData(glc.ARRAY_BUFFER, f.colors, glc.STATIC_DRAW);
+                            glc.bufferData(glc.ARRAY_BUFFER, col, glc.STATIC_DRAW);
                         }
                         uploadedFrame = currentFrame;
+                        uploadedProduct = product;
                     }
-                    if (!f.count) return; // empty (no-echo) frame
+                    if (!cnt) return; // this product has nothing to draw on this frame
 
                     const matrix = (args && args.defaultProjectionData && args.defaultProjectionData.mainMatrix)
                         || (args && args.modelViewProjectionMatrix) || args;
@@ -214,7 +225,7 @@
                     glc.vertexAttribPointer(aColor, 4, glc.UNSIGNED_BYTE, true, 0, 0);
                     glc.enable(glc.BLEND);
                     glc.blendFunc(glc.SRC_ALPHA, glc.ONE_MINUS_SRC_ALPHA);
-                    glc.drawArrays(glc.TRIANGLES, 0, f.count);
+                    glc.drawArrays(glc.TRIANGLES, 0, cnt);
                     glc.disableVertexAttribArray(aPos);
                     glc.disableVertexAttribArray(aColor);
                     glc.bindBuffer(glc.ARRAY_BUFFER, null);
@@ -279,9 +290,11 @@
                     return m.decodeAndBuild(ab, siteLat, siteLon, MIN_DBZ);
                 }).then(function (r2) {
                     applyFrameResult({
-                        token: myToken, index: index, empty: !r2.geom,
+                        token: myToken, index: index, empty: !r2.geom && !r2.velGeom,
                         positions: r2.geom && r2.geom.positions, colors: r2.geom && r2.geom.colors,
                         count: r2.geom && r2.geom.count,
+                        velPositions: r2.velGeom && r2.velGeom.positions, velColors: r2.velGeom && r2.velGeom.colors,
+                        velCount: r2.velGeom && r2.velGeom.count,
                         decodeMs: r2.decodeMs, buildMs: r2.buildMs, radials: r2.radials, gates: r2.gates, bytes: r2.bytes,
                     });
                 }).catch(function (err) {
@@ -338,6 +351,15 @@
         setOpacity: function (map, op) {
             opacity = op;
             if (map.getLayer(LAYER_ID)) map.triggerRepaint();
+        },
+        // Switch rendered moment ('reflectivity' | 'velocity'). Both geometries are already
+        // decoded per frame, so this just re-uploads + repaints — no re-fetch/re-decode.
+        setProduct: function (map, p) {
+            if (p !== 'reflectivity' && p !== 'velocity' || p === product) return;
+            product = p;
+            uploadedFrame = -1; // force the new product's geometry to upload on the next render
+            hostLog('product=' + product);
+            if (map && map.getLayer(LAYER_ID)) map.triggerRepaint();
         },
         // Re-add after a basemap switch (setStyle drops custom layers); frames are retained.
         reAdd: function (map) {

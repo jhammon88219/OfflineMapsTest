@@ -48,6 +48,9 @@ namespace OfflineMapsTest.Services
 		public Task SetRadarOpacityAsync(double opacity) =>
 			_mapView.RunScriptAsync(Call("setRadarOpacity", opacity));
 
+		public Task SetRadarProductAsync(string product) =>
+			_mapView.RunScriptAsync(Call("setRadarProduct", product));
+
 		public Task ShowRadarSitesAsync(string sitesJson) =>
 			_mapView.RunScriptAsync(Call("showRadarSites", sitesJson));
 

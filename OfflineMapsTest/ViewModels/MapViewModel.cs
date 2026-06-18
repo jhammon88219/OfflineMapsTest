@@ -45,9 +45,6 @@ namespace OfflineMapsTest.ViewModels
 
 		private MapStyle? _selectedStyle;
 
-		// Whether the bottom control ribbon is hidden.
-		private bool _isRibbonCollapsed;
-
 		// The region the main map is framed on (CONUS).
 		private MapRegion? _mainRegion;
 
@@ -171,35 +168,44 @@ namespace OfflineMapsTest.ViewModels
 			radarOptions.AddRange(_radarSiteProvider.GetSites().Select(s => new RadarOption($"{s.Id} — {s.Name}", s)));
 			RadarOptions = radarOptions;
 			_selectedRadarOption = RadarOptions[0];
+
+			// Flat site list for the dock's "Radar Sites" tool window (click a row to select).
+			RadarSites = _radarSiteProvider.GetSites();
 		}
+
+		/// <summary>All radar sites (id/name/coords), for the dock's "Radar Sites" tool-window list.</summary>
+		public IReadOnlyList<RadarSite> RadarSites { get; }
 
 		public IReadOnlyList<MapStyle> AvailableStyles { get; }
 
 		/// <summary>The region the main, full-window map is framed on.</summary>
 		public MapRegion? MainRegion => _mainRegion;
 
-		/// <summary>
-		/// Whether the bottom control ribbon is collapsed (hidden). Pure view state.
-		/// Hand-written INPC.
-		/// </summary>
-		public bool IsRibbonCollapsed
+		// ── Left tool-window dock (static mock of a VS-style dock). The whole pane collapses to
+		//    a reveal button; the tool windows inside are fixed equal-height regions. ──
+		private bool _isDockCollapsed; // start expanded so the dock is visible on launch
+
+		/// <summary>Whether the left tool-window dock is collapsed (hidden behind its reveal button).</summary>
+		public bool IsDockCollapsed
 		{
-			get => _isRibbonCollapsed;
+			get => _isDockCollapsed;
 			set
 			{
-				if (_isRibbonCollapsed == value)
+				if (_isDockCollapsed == value)
 				{
 					return;
 				}
-
-				_isRibbonCollapsed = value;
+				_isDockCollapsed = value;
 				OnPropertyChanged();
-				OnPropertyChanged(nameof(IsRibbonExpanded));
+				OnPropertyChanged(nameof(IsDockExpanded));
 			}
 		}
 
-		/// <summary>Convenience inverse of <see cref="IsRibbonCollapsed"/>.</summary>
-		public bool IsRibbonExpanded => !_isRibbonCollapsed;
+		/// <summary>Convenience inverse of <see cref="IsDockCollapsed"/>.</summary>
+		public bool IsDockExpanded => !_isDockCollapsed;
+
+		/// <summary>Toggles the dock open/closed; bound to the collapse + reveal buttons.</summary>
+		public void ToggleDock() => IsDockCollapsed = !_isDockCollapsed;
 
 		/// <summary>Outlook days that have products (1-8), each labeled with its date;
 		/// static for the app lifetime.</summary>
@@ -652,6 +658,30 @@ namespace OfflineMapsTest.ViewModels
 				if (_isMapReady)
 				{
 					_ = _mapService.SetRadarOpacityAsync(value);
+				}
+			}
+		}
+
+		// 0 = reflectivity, 1 = velocity. Bound to the Radar Loop tool window's Product combo.
+		private int _radarProductIndex;
+
+		/// <summary>Selected radar product index (0 = Reflectivity, 1 = Velocity).</summary>
+		public int RadarProductIndex
+		{
+			get => _radarProductIndex;
+			set
+			{
+				if (_radarProductIndex == value)
+				{
+					return;
+				}
+
+				_radarProductIndex = value;
+				OnPropertyChanged();
+
+				if (_isMapReady)
+				{
+					_ = _mapService.SetRadarProductAsync(value == 1 ? "velocity" : "reflectivity");
 				}
 			}
 		}
