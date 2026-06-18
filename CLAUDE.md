@@ -107,6 +107,18 @@ MVVM with interface seams, hand-wired in the `MainWindow` constructor (no DI con
   the C# time-parsing are untouched. (History: this was first mis-rendered as one shared hatch
   for all CIG levels — the actual per-group encoding lives in `LABEL`/`DN`=2·group, verified
   against cached GeoJSON.) Outlook sits below the basemap labels.
+- **SPC outlook info card (top-right):** shown while an outlook (not "None") is selected; same
+  theme brushes as the ribbon/radar card. Header (`Day N · Type`) + **Issued/Effective** (from the
+  cached GeoJSON times) + the **SPC forecast-discussion text** in a scrollable monospace block.
+  The discussion is scraped from SPC's HTML page's `<pre>` block by
+  `ISpcOutlookService.GetNarrativeAsync` (`SpcOutlookService`: `NarrativeUrlFor` maps day→page —
+  `day{1,2,3}otlk.html` and `exper/day4-8/`; **fire-weather pages use a different layout, deferred**),
+  `ExtractPreText` strips tags + decodes entities, cached one file per day group
+  (`narrative-day{N}.txt`, shared by that day's hazard sub-products) with last-known-good fallback.
+  `MapViewModel.UpdateOutlookCard` sets the title/times and lazily fires `RefreshOutlookNarrativeAsync`
+  (guards against a stale fetch when the selection changes; silent re-fetch on a same-product refresh,
+  "Loading…" only on a product switch). Minor v1 cruft: ~2 footer lines (a "CLICK TO GET … PRODUCT"
+  link + "NOTE:" line) trail the forecaster signature — easy to trim later.
 - **Radar (NEXRAD Level II):** `Level2RadarService` lists the recent volumes for a site
   from the public AWS **archive** bucket `unidata-nexrad-level2` (keys are
   date-chronological under `<y>/<m>/<d>/<SITE>/`, so take the last N **ending in `_V06`**;

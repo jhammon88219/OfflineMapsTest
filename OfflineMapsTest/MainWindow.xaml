@@ -259,5 +259,55 @@
                 </Expander>
             </StackPanel>
         </Border>
+
+        <!-- SPC outlook info card (top-right). Shown while an outlook (not "None") is selected.
+             Same theme brushes as the ribbon/radar card. Header + issued/effective times +
+             the SPC forecast discussion (monospace, scrollable). -->
+        <Border HorizontalAlignment="Right"
+                VerticalAlignment="Top"
+                Margin="0,14,14,0"
+                MinWidth="320"
+                MaxWidth="480"
+                CornerRadius="8"
+                Padding="16,14"
+                Background="{ThemeResource SolidBackgroundFillColorBaseBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                Visibility="{x:Bind VisibleWhen(ViewModel.HasOutlookCard), Mode=OneWay}">
+            <StackPanel Spacing="12">
+
+                <!-- Header -->
+                <TextBlock Text="{x:Bind ViewModel.OutlookCardTitle, Mode=OneWay}"
+                           FontSize="16" FontWeight="SemiBold"
+                           Foreground="{ThemeResource TextFillColorPrimaryBrush}"/>
+
+                <!-- Issued / effective -->
+                <StackPanel Spacing="6">
+                    <StackPanel Orientation="Horizontal" Spacing="10">
+                        <TextBlock Text="Issued" Width="64" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                        <TextBlock Text="{x:Bind ViewModel.OutlookIssuedText, Mode=OneWay}"
+                                   FontSize="12" Foreground="{ThemeResource TextFillColorPrimaryBrush}"/>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="10">
+                        <TextBlock Text="Effective" Width="64" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                        <TextBlock Text="{x:Bind ViewModel.OutlookValidText, Mode=OneWay}"
+                                   FontSize="12" Foreground="{ThemeResource TextFillColorPrimaryBrush}" TextWrapping="Wrap"/>
+                    </StackPanel>
+                </StackPanel>
+
+                <!-- SPC forecast discussion (scrollable; monospace preserves SPC's formatting) -->
+                <ScrollViewer MaxHeight="340"
+                              VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Disabled">
+                    <TextBlock Text="{x:Bind ViewModel.OutlookNarrativeText, Mode=OneWay}"
+                               FontFamily="Cascadia Mono, Consolas"
+                               FontSize="12"
+                               LineHeight="17"
+                               Foreground="{ThemeResource TextFillColorPrimaryBrush}"
+                               IsTextSelectionEnabled="True"
+                               TextWrapping="Wrap"/>
+                </ScrollViewer>
+            </StackPanel>
+        </Border>
     </Grid>
 </Window>

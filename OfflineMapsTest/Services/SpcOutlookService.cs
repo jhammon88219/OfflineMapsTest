@@ -250,5 +250,99 @@ namespace OfflineMapsTest.Services
 				// Validators are an optimization; failing to persist them is non-fatal.
 			}
 		}
+
+		public async Task<string?> GetNarrativeAsync(SpcOutlookProduct product, CancellationToken cancellationToken = default)
+		{
+			var url = NarrativeUrlFor(product);
+			if (url is null)
+			{
+				return null; // no supported narrative page (e.g. fire weather, for now)
+			}
+
+			var cacheFile = NarrativeCacheFileFor(product);
+			try
+			{
+				var html = await _http.GetStringAsync(url, cancellationToken);
+				var text = ExtractPreText(html);
+				if (text is not null)
+				{
+					try { await File.WriteAllTextAsync(cacheFile, text, cancellationToken); }
+					catch { /* cache write is best effort */ }
+					return text;
+				}
+			}
+			catch (OperationCanceledException)
+			{
+				throw;
+			}
+			catch
+			{
+				// Fall through to the last-known-good cached copy below.
+			}
+
+			try
+			{
+				if (File.Exists(cacheFile))
+				{
+					return await File.ReadAllTextAsync(cacheFile, cancellationToken);
+				}
+			}
+			catch { /* non-fatal */ }
+			return null;
+		}
+
+		// Maps a product to its SPC forecast-discussion HTML page. One page per day group covers
+		// all of that day's hazard sub-products (the Day-1 convective text discusses tornado,
+		// wind, and hail together). Fire-weather pages use a different layout — deferred for now.
+		private static string? NarrativeUrlFor(SpcOutlookProduct product)
+		{
+			if (product.Type is SpcOutlookType.FireWeather or SpcOutlookType.ExtendedFireWeather)
+			{
+				return null;
+			}
+			return product.Day switch
+			{
+				1 => "https://www.spc.noaa.gov/products/outlook/day1otlk.html",
+				2 => "https://www.spc.noaa.gov/products/outlook/day2otlk.html",
+				3 => "https://www.spc.noaa.gov/products/outlook/day3otlk.html",
+				>= 4 and <= 8 => "https://www.spc.noaa.gov/products/exper/day4-8/",
+				_ => null
+			};
+		}
+
+		// One cached narrative per day group (shared by that day's hazard sub-products).
+		private string NarrativeCacheFileFor(SpcOutlookProduct product)
+		{
+			var key = product.Day >= 4 ? "day4-8" : $"day{product.Day}";
+			return Path.Combine(CacheDirectory, $"narrative-{key}.txt");
+		}
+
+		// Pulls the text out of the page's &lt;pre&gt; block (where SPC puts the product), strips
+		// any inline tags (e.g. related-product &lt;a&gt; links), and decodes HTML entities.
+		private static string? ExtractPreText(string html)
+		{
+			var open = html.IndexOf("<pre", StringComparison.OrdinalIgnoreCase);
+			if (open < 0)
+			{
+				return null;
+			}
+			var contentStart = html.IndexOf('>', open);
+			if (contentStart < 0)
+			{
+				return null;
+			}
+			contentStart++;
+			var close = html.IndexOf("</pre>", contentStart, StringComparison.OrdinalIgnoreCase);
+			if (close < 0)
+			{
+				return null;
+			}
+
+			var inner = html.Substring(contentStart, close - contentStart);
+			inner = System.Text.RegularExpressions.Regex.Replace(inner, "<[^>]+>", string.Empty);
+			inner = System.Net.WebUtility.HtmlDecode(inner);
+			inner = inner.Trim('\r', '\n', ' ', '\t');
+			return inner.Length > 0 ? inner : null;
+		}
 	}
 }
