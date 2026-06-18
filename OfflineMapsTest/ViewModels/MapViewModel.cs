@@ -294,6 +294,42 @@ namespace OfflineMapsTest.ViewModels
 		/// <summary>Whether an issued/valid readout is available to show.</summary>
 		public bool HasOutlookTimes => _outlookTimesText.Length > 0;
 
+		// ── SPC outlook info card (shown while an outlook, not "None", is selected). Title +
+		//    issued/effective times come from the cached GeoJSON; the forecast-discussion text is
+		//    fetched lazily from SPC's HTML page (GetNarrativeAsync). All recomputed in
+		//    UpdateOutlookCard when the selection changes or the outlook cache refreshes. ──
+		private string _outlookCardTitle = string.Empty;
+		private string _outlookIssuedText = string.Empty;
+		private string _outlookValidText = string.Empty;
+		private string _outlookNarrative = string.Empty;
+
+		/// <summary>Whether an outlook (not "None") is selected — drives the info card's visibility.</summary>
+		public bool HasOutlookCard => _selectedOption?.Product is not null;
+
+		/// <summary>Card header for the selected outlook, e.g. "Day 1 · Tornado".</summary>
+		public string OutlookCardTitle => _outlookCardTitle;
+
+		/// <summary>When the outlook was issued (local), or "—".</summary>
+		public string OutlookIssuedText => _outlookIssuedText;
+
+		/// <summary>The outlook's valid window (local), or "—".</summary>
+		public string OutlookValidText => _outlookValidText;
+
+		/// <summary>SPC forecast-discussion text for the selected outlook (or a status line).</summary>
+		public string OutlookNarrativeText
+		{
+			get => _outlookNarrative;
+			private set
+			{
+				if (_outlookNarrative == value)
+				{
+					return;
+				}
+				_outlookNarrative = value;
+				OnPropertyChanged();
+			}
+		}
+
 		/// <summary>Radar site options: a leading "None" entry plus the curated sites.</summary>
 		public IReadOnlyList<RadarOption> RadarOptions { get; }
 
@@ -726,30 +762,94 @@ namespace OfflineMapsTest.ViewModels
 				.ToList();
 		}
 
-		// Reads the issued/valid/expire times for the current product from its cached
-		// GeoJSON and formats them (local time). Cleared when None is selected or no times
-		// are available (e.g. cache not yet written, or an outlook with no risk areas).
+		// Reads the issued/valid/expire times for the current product from its cached GeoJSON
+		// (local time) and updates both the ribbon readout and the info card. The ribbon line is
+		// cleared when None is selected or no times are available; the card follows the selection.
 		private void UpdateOutlookTimes()
 		{
 			var product = _selectedOption?.Product;
 			var times = product is null ? null : _spcOutlookService.GetTimesForProduct(product);
+
 			if (times is null)
 			{
 				OutlookTimesText = string.Empty;
-				return;
+			}
+			else
+			{
+				var parts = new List<string>(2);
+				if (times.Issued is { } issued)
+				{
+					parts.Add($"Issued {issued.ToLocalTime():ddd h:mm tt}");
+				}
+				if (times.Valid is { } valid && times.Expire is { } expire)
+				{
+					parts.Add($"Valid {valid.ToLocalTime():ddd h:mm tt} → {expire.ToLocalTime():ddd h:mm tt}");
+				}
+				OutlookTimesText = string.Join("  ·  ", parts);
 			}
 
-			var parts = new List<string>(2);
-			if (times.Issued is { } issued)
+			UpdateOutlookCard(product, times);
+		}
+
+		// Updates the SPC outlook info card: title + issued/effective from the cached times, and
+		// kicks off the (lazy, disk-cached) forecast-discussion fetch. Cleared for "None".
+		private void UpdateOutlookCard(SpcOutlookProduct? product, SpcOutlookTimes? times)
+		{
+			if (product is null)
 			{
-				parts.Add($"Issued {issued.ToLocalTime():ddd h:mm tt}");
+				_outlookCardTitle = string.Empty;
+				_outlookIssuedText = string.Empty;
+				_outlookValidText = string.Empty;
+				_narrativeFor = null;
+				OutlookNarrativeText = string.Empty;
 			}
-			if (times.Valid is { } valid && times.Expire is { } expire)
+			else
 			{
-				parts.Add($"Valid {valid.ToLocalTime():ddd h:mm tt} → {expire.ToLocalTime():ddd h:mm tt}");
+				_outlookCardTitle = $"Day {product.Day} · {product.TypeLabel}";
+				_outlookIssuedText = times?.Issued is { } iss
+					? iss.ToLocalTime().ToString("ddd MMM d · h:mm tt")
+					: "—";
+				_outlookValidText = times?.Valid is { } v && times?.Expire is { } e
+					? $"{v.ToLocalTime():ddd h:mm tt} → {e.ToLocalTime():ddd h:mm tt}"
+					: "—";
+				_ = RefreshOutlookNarrativeAsync(product);
 			}
 
-			OutlookTimesText = string.Join("  ·  ", parts);
+			OnPropertyChanged(nameof(HasOutlookCard));
+			OnPropertyChanged(nameof(OutlookCardTitle));
+			OnPropertyChanged(nameof(OutlookIssuedText));
+			OnPropertyChanged(nameof(OutlookValidText));
+		}
+
+		// The product the current narrative belongs to — so a same-product refresh updates the
+		// text silently, while a product switch shows the "Loading…" placeholder.
+		private SpcOutlookProduct? _narrativeFor;
+
+		// Fetches the SPC forecast discussion (network → disk cache) and shows it, unless the user
+		// changed selection while it loaded.
+		private async Task RefreshOutlookNarrativeAsync(SpcOutlookProduct product)
+		{
+			if (!ReferenceEquals(_narrativeFor, product))
+			{
+				OutlookNarrativeText = "Loading forecast discussion…";
+			}
+
+			string? text = null;
+			try
+			{
+				text = await _spcOutlookService.GetNarrativeAsync(product);
+			}
+			catch
+			{
+				// Best effort; fall through to the not-available message.
+			}
+
+			if (!ReferenceEquals(_selectedOption?.Product, product))
+			{
+				return; // selection changed mid-fetch
+			}
+			_narrativeFor = product;
+			OutlookNarrativeText = text ?? "Forecast discussion isn't available for this product yet.";
 		}
 
 		/// <summary>

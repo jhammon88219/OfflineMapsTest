@@ -46,5 +46,14 @@ namespace OfflineMapsTest.Services
 		/// rather than thrown.
 		/// </summary>
 		Task<IReadOnlyList<SpcOutlookFetchResult>> RefreshAllAsync(CancellationToken cancellationToken = default);
+
+		/// <summary>
+		/// Fetches the SPC forecast-discussion narrative text for the product's outlook (the
+		/// prose from the SPC HTML page, scraped from its &lt;pre&gt; block and cached on disk).
+		/// One narrative covers all of a day's hazard sub-products. Returns null when the product
+		/// has no supported narrative page (fire-weather is not wired yet) or fetching fails with
+		/// no cached copy. The last-known-good text is returned on a network failure.
+		/// </summary>
+		Task<string?> GetNarrativeAsync(SpcOutlookProduct product, CancellationToken cancellationToken = default);
 	}
 }
