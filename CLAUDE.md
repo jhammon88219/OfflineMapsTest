@@ -75,10 +75,14 @@ MVVM with interface seams, hand-wired in the `MainWindow` constructor (no DI con
   d1–8) as GeoJSON via `HttpClient` (conditional GETs, last-known-good on failure,
   per-product isolation, results returned not thrown). URLs live in the editable
   `SpcOutlookCatalog`; convective come from SPC `.lyr.geojson` "cake layers", fire from
-  the NOAA ArcGIS `SPC_firewx` MapServer. A background refresh fires on launch; when it
-  finishes, `MainWindow` re-applies the current outlook on the UI thread
-  (`MapViewModel.OnOutlooksRefreshed`) so a first-run (empty-cache) overlay appears and the
-  issued/valid readout picks up the freshly-written times. UI: dependent Day + Product
+  the NOAA ArcGIS `SPC_firewx` MapServer. A background refresh fires on launch **and then every
+  `OutlookRefreshInterval` (15 min) via a `PeriodicTimer`** in `MainWindow.RefreshOutlooksInBackgroundAsync`
+  (conditional GETs keep periodic cycles cheap — mostly 304s); when it finishes, `MainWindow`
+  re-applies the current outlook on the UI thread (`MapViewModel.OnOutlooksRefreshed`) so a
+  first-run (empty-cache) overlay appears and the issued/valid readout picks up the freshly-written
+  times. The re-apply happens **on launch and on any cycle that actually pulled new data** (≥1
+  product `Updated`), not on all-304 cycles, so a long session doesn't needlessly re-render the
+  overlay every 15 min. UI: dependent Day + Product
   comboboxes (cascade, with a "None" option) and an Opacity slider. The **Day combo is
   labeled by date** ("Day 1 · Sat Jun 14") — `MapViewModel.BuildDayOptions` computes Day N
   = today + N-1 (local). A small **issued/valid readout** above the controls shows the
@@ -87,10 +91,22 @@ MVVM with interface seams, hand-wired in the `MainWindow` constructor (no DI con
   `ISSUE_ISO`/`VALID_ISO`/`EXPIRE_ISO`, fire-weather only lowercase `valid`/`expire`
   (`yyyyMMddHHmm`, no issue). It reads from disk so it stays correct even when the cache is
   a refresh behind; empty outlooks (0 features) show no times. Convective polygons render
-  in their embedded SPC colors; "significant" areas
-  (`LABEL` contains `CIG` or `SIG`) render as diagonal **hatching** via a runtime canvas
-  `fill-pattern` (density = `TILE` const in `map.js`, currently 32). Outlook sits below
-  the basemap labels.
+  in their embedded SPC colors; "significant" / **Conditional Intensity Group** areas
+  (separate polygons, `LABEL` = `CIG1`/`CIG2`/`CIG3` — tornado & wind go to 3, hail to 2;
+  legacy single-significant `SIGN` still handled) render as **hatching** via runtime canvas
+  `fill-pattern` images, **one pattern per group matching SPC's intensity legend**: CIG1 = a
+  diagonal row of **dashes**, CIG2 = solid diagonal **lines**, CIG3 = solid **cross-hatch**
+  (`sig-hatch-1/2/3`, built by `makeHatchImage(tile, width, cross, dash)` in `map.js`), drawn
+  on three constant-`fill-pattern` layers filtered by `LABEL` (`spc-outlook-sig1/2/3`). The
+  groups **nest** (CIG3 ⊂ CIG2 ⊂ CIG1, each ~tracking a probability contour), so rendered
+  as-is the lower hatch shows through the higher one's gaps — so `map.js` **fetches the GeoJSON
+  itself, clips each lower group to exclude the next-higher one** (`clipSigFeatures` punches the
+  higher polygon in as a winding-corrected hole; valid because they're strictly nested — no
+  clipping library), then renders from that in-memory object (`outlookData`, reused on basemap
+  re-add). The clip + the per-group patterns live entirely in `map.js`; the cached GeoJSON and
+  the C# time-parsing are untouched. (History: this was first mis-rendered as one shared hatch
+  for all CIG levels — the actual per-group encoding lives in `LABEL`/`DN`=2·group, verified
+  against cached GeoJSON.) Outlook sits below the basemap labels.
 - **Radar (NEXRAD Level II):** `Level2RadarService` lists the recent volumes for a site
   from the public AWS **archive** bucket `unidata-nexrad-level2` (keys are
   date-chronological under `<y>/<m>/<d>/<SITE>/`, so take the last N **ending in `_V06`**;
@@ -122,7 +138,7 @@ MVVM with interface seams, hand-wired in the `MainWindow` constructor (no DI con
   top of those archive frames an extra **near-real-time "live" frame** (from the chunks
   bucket — see "Radar live frame") is appended as the newest when available. UI
   adds **play/pause + a frame scrubber + a timestamp**; the archive loop reloads when a new
-  volume appears (~5 min) and the live frame refreshes on its own ~60 s poll. Renders
+  volume appears (~5 min) and the live frame refreshes on its own ~30 s poll. Renders
   beneath the SPC outlook and basemap labels (dBZ ramp in
   `radar-decode.js`, `MIN_DBZ` in `radar.js`). Loop state + playback live in `MapViewModel`;
   `radar.js` stores the decoded frames and renders the current one (uploading on switch; a
@@ -233,33 +249,75 @@ whole volume to finish + aggregate.
   cached single-tilt `.V06` is the 24-byte header + the *decompressed* metadata + radial records
   (no control words), which the JS decoder reads directly.
 - **Latest-sweep / SAILS chasing (the freshness lever):** precip VCPs (12/212/215) re-scan the
-  0.5° tilt 2-3 *extra* times mid-volume (SAILS/MRLE), so the volume-start 0.5° isn't the freshest
-  base scan available. `SelectLatestSweep` walks the decoded records, groups consecutive
-  elevation-1 runs into sweeps, and emits the **last *complete* 0.5° sweep** (a run terminated by
-  a higher tilt) — newest data, not the volume start. `VolumeTime` is that sweep's **actual radial
+  0.5° tilt 1-3 *extra* times mid-volume (SAILS/MRLE), so the volume-start 0.5° isn't the freshest
+  base scan available. **The re-scan carries its own, HIGHER elevation NUMBER but the SAME elevation
+  ANGLE as the base tilt**, so `SelectLatestSweep` keys on **angle, not number**: it groups records
+  into cuts by elevation number, reads each cut's elevation ANGLE (median of the radial-header
+  big-endian float at ICAO+24 — `ElevationAngleOf`) and its moments (`HasMoment` checks for a `DREF`
+  reflectivity / `DVEL` velocity block with a plausible gate count), then emits the **latest
+  *complete* lowest-tilt SURVEILLANCE cut**: lowest tilt = the min angle among reflectivity cuts,
+  matched within `tiltTol` (0.12°, the SAILS re-scan reads the base angle within antenna jitter);
+  SURVEILLANCE = reflectivity present, NO velocity (split-cut precip VCPs scan 0.5° twice — a
+  long-PRT surveillance cut we render and a short-PRT Doppler cut carrying velocity + range-folded
+  reflectivity we skip). Clear-air VCPs have one combined cut, so when no velocity-free cut exists
+  it falls back to the latest low-tilt reflectivity cut. (**History/bug:** the original keyed on
+  elevation-NUMBER == 1, which only ever found the volume-start scan and missed the SAILS re-scans —
+  so SAILS sites sat 4-7 min behind during outbreaks while the card claimed `0.5°×1`. Verified by
+  decoding live KILX (SAILS, re-scan at elevation number 13) and KSHV (non-SAILS) volumes; the new
+  logic picks the re-scan on KILX and the base on KSHV.) `VolumeTime` is that cut's **actual radial
   collection time** (`ReadCollectionTime`: ms-since-midnight at ICAO+4, modified Julian at ICAO+8;
   sanity-clamped to [start, now] or it falls back to the volume-start stamp). So in SAILS weather
-  the live frame refreshes every ~1.5-2 min instead of once per ~5-6 min volume. Clear-air VCPs
-  have one 0.5° sweep, so it's a no-op there.
+  the live frame now refreshes every ~1.5-3 min instead of once per ~5-6 min volume; the `0.5°×N`
+  mode count is the number of low-tilt sweeps found. Clear-air VCPs have one 0.5° sweep, no-op there.
 - **Per-volume chunk cache:** `GetLiveFrameAsync` keeps the decoded blocks of the current
   in-progress volume (`_liveVolKey`/`_liveHeader`/`_liveBlocks`) and on each poll downloads +
   bzip2-decodes only the **new** chunks, so chasing the growing volume costs ~one volume's worth
   of bandwidth total rather than re-pulling it each poll. Reset when the newest volume changes.
   Capped at `LiveChunkCap` (90) chunks.
+- **Newest → previous fallback (the "slow first live frame" fix):** `GetLiveFrameAsync` builds the
+  newest volume via `BuildLiveFrameAsync(…, useCache:true)`; when that volume is still mid-scan and
+  has **no complete 0.5° sweep yet**, it doesn't just return null — it **falls back to the previous
+  (finished) volume** (`useCache:false`, one-shot). Without this, a freshly-clicked site whose newest
+  chunks volume just started showed nothing — `mode`/`live` stayed `—` — until that volume finished
+  its first tilt, **a minute or two on slow clear-air VCPs** (a volume is ~10 min, one 0.5° sweep, no
+  SAILS); KLGX (Langley Hill, clear-air) was the repro. The previous volume is finished and immutable,
+  so it's built **once and cached** (`_fallbackKey`/`_fallbackVolume`) and reused across the repeated
+  polls instead of re-downloading ~a volume of chunks each time. Its sweep is a touch older but usually
+  still ≥ the archive newest, and crucially it surfaces the mode immediately; once the newest volume
+  completes, the next poll appends/updates it as the real live frame.
 - **Mode readout:** `SelectLatestSweep` also returns the **VCP number** (`ReadVcp`: the radial's
   VOL data-block pointer at ICAO+32, VCP at VOL+40) and the count of complete 0.5° sweeps.
   `DescribeMode` → e.g. `VCP 215 · precip · 0.5°×3 · SAILS/MRLE ×2`, carried on
   `RadarVolume.ModeText` and shown on the debug card (`mode:` line). Clear-air VCPs = 31/32/35/90.
+  The `mode:` line reads `MapViewModel._liveModeText`, captured in `RecordLivePoll` from **every**
+  successful live poll — deliberately decoupled from `_liveFrame` (the appended frame). An
+  offline/stale site (e.g. KVNX during an outage) still has a newest chunks volume, but it merely
+  equals the archive newest, so `ApplyLiveFrameAsync` correctly does NOT append it as a new frame
+  (no duplicate) — yet the mode is still known from the poll, so we show it instead of stalling on
+  "— (awaiting live frame)". `_liveModeText` is cleared per site click (not per reload).
 - **Hybrid:** loop *history* stays on the archive bucket (chunks expire — old volumes lose
   their S chunk, e.g. `343/` starts at chunk 015). Only the single newest/live frame is from
   chunks, cached as `{site}_live_<sweepTime>.V06` (own infix; skipped by the archive prune, kept
   newest-1 by `PruneLiveCache`; a fresh sweep = new timestamp = new file = the VM sees it as newer).
-- **VM:** `LoadLoopAsync` loads the archive frames first (fast first paint), then
-  `RefreshLiveFrameAsync` layers the live frame on top via `ApplyLiveFrameAsync` — appended as an
-  extra newest frame at index `_archiveCount`, **but only when strictly newer than the archive
-  newest / current live** (the guard that stops a stale chunks volume from overriding fresh data).
-  `RunLiveFrameRefreshAsync` re-runs it every ~60 s (`LiveFrameRefreshSeconds`), but **polls
-  faster (~20 s, `LiveFrameRetrySeconds`) until the first live frame lands** — the load-time poll
+- **VM load order (tuned for fast card population):** `LoadLoopCoreAsync` loads the **newest
+  archive frame first** (immediate paint), then **`RefreshLiveFrameAsync` (the live frame + scan
+  mode) BEFORE the older-frame backfill**, then backfills `0.._archiveCount-2`. The ordering is
+  deliberate: the card's time/mode/freshness come from the newest + live frames, so doing the live
+  poll before the ~5 s backfill makes the card populate in ~1-2 s instead of ~6-8 s. (Backfill is
+  bound by `_archiveCount`, not `_frameCount`, since the live append grows `_frameCount`.) The
+  poll/backfill run **sequentially** under `_loopGate` — never concurrently — so the live append
+  growing `_frameTimes` can't race the backfill's index writes. The **card properties are also
+  decoupled from `IsLoopReady`**: `RadarCardTime`/`RadarFrameDetail`/`RadarStatus`/`RadarAgeText`
+  show as soon as the relevant frame's time exists (newest loads sub-second), rather than waiting
+  for every frame to decode; only the scrubber/playback wait on `IsLoopReady`. (`RadarLoopSpanText`'s
+  oldest end still fills in as the backfill completes — secondary info.) `ApplyLiveFrameAsync`
+  appends the live frame as an extra newest frame at index `_archiveCount`, **but only when strictly
+  newer than the archive newest / current live** (the guard that stops a stale chunks volume from
+  overriding fresh data).
+  `RunLiveFrameRefreshAsync` re-runs it every ~30 s (`LiveFrameRefreshSeconds`, tuned to catch SAILS
+  re-scans), but **polls faster (~20 s, `LiveFrameRetrySeconds`) until the first live frame lands** —
+  it stamps `_nextLivePollAt` before each wait so the debug card's `poll:` line shows a live `next in
+  Ns` countdown. The load-time poll
   often hits a still-scanning volume, so the `mode`/`live` card fields stay `—` until a retry
   succeeds. A `_loopGate`
   semaphore serializes the (re)load and the live poll so they can't interleave at awaits and
@@ -275,8 +333,15 @@ whole volume to finish + aggregate.
   `currentFrame`, and `applyFrameResult` routes every show through `showCurrent`, which **re-adds
   the layer whenever it's missing**. So any decode (pending target, first arrival, or the current
   frame) restores the layer, paused or playing.
-- **Debug card + event log:** a lower-left on-map dev card (`MapViewModel.RadarDebugText`, shown
-  while a loop is active, ticked 1 s by `RunDebugTickAsync`) reports site, current frame
+- **Radar site card + event log:** a lower-left on-map card (shown while a loop is active, ticked
+  1 s by `RunDebugTickAsync`). The **top** is a polished site readout — status dot (color from
+  `MapViewModel.RadarStatus` / `RadarFreshness` Live/Recent/Stale by newest-frame age, mapped to a
+  brush by `MainWindow.RadarDotBrush`), title (`RadarCardTitle`), current frame time + detail
+  (`RadarCardTime`/`RadarFrameDetail`), and `RadarModeText`/`RadarAgeText`/`RadarLoopSpanText` rows.
+  All those card props + the diagnostics text are raised together by `RaiseRadarCard()` (replacing
+  the old scattered `OnPropertyChanged(nameof(RadarDebugText))` calls). The full developer
+  diagnostics live in a **collapsible "Diagnostics" `Expander`** (collapsed by default) bound to the
+  same `MapViewModel.RadarDebugText` monospace blob — which still reports site, current frame
   #/count + source (ARCHIVE/LIVE), **load timings** (`load:` line — seconds from the site click
   to the first frame, and to all frames incl. the live one, rendered; captured once per click,
   frozen after the initial load so the ~60 s live refreshes don't overwrite them, also logged as
@@ -301,24 +366,33 @@ cached frames on reload. The chunks-bucket live frame is **done** (see "Radar li
 a possible follow-up is making the live frame its *own* extra step rather than just refreshing
 the trailing slot, and tuning the ~60 s poll.
 
-**→ NEXT (teed up): robust VCP parse (kill the cosmetic "VCP ?").** The debug card's `mode:`
-line shows `VCP ?` for some volumes because `Level2RadarService.ReadVcp` is a best-effort
-byte-offset read of the **Message 31** "VOL" data-block (ICAO+32 → block pointer, VOL+40 →
-2-byte VCP) and the offset math doesn't land on every volume. It's now *validated* against the
-real VCP set (`ClearAirVcps`/`PrecipVcps` in `DescribeMode`), so a bad read shows `?` rather than
-a wrong number — but the goal is to make more of them resolve. Authoritative source: **Message 5
-(RDA Volume Coverage Pattern Data)**, which lives in the volume's leading **metadata record** —
-i.e. `blocks[0 .. firstRadial-1]` inside `SelectLatestSweep` (the S-chunk's decompressed block).
-Walk that block's messages to type 5 and read the pattern number. **This is offset-guessing
-again** (like the `ReadCollectionTime`/`ReadVcp` work), so VERIFY before trusting: the vendored
-JS decoder (`nexrad-level-2-data`) already parses the VCP — cross-check by surfacing it from
-`radar-decode.js`/the worker for a few sites, or decode one cached `.V06` in a throwaway. The
-`0.5°×N` SAILS count is unaffected (it's from sweep-counting, not the VCP). Cosmetic only —
-radar rendering doesn't depend on it. Files: `Services/Level2RadarService.cs` (`ReadVcp`,
-`SelectLatestSweep`, `DescribeMode`).
+**Robust VCP parse — DONE (Message 5).** `SelectLatestSweep` now reads the VCP from
+**Message 5 (RDA Volume Coverage Pattern Data)** in the leading metadata record
+(`ReadVcpFromMetadata`), falling back to the old best-effort Message-31 VOL-block read
+(`ReadVcp`) only when Message 5 doesn't yield a recognized VCP. **Framing (verified against
+the vendored decoder's own constants/parsers, `Assets/Map/vendor/nexrad-level-2-data.esm.js`,
+AND against ~22 cached `.V06` files — every one resolved a real VCP):** the metadata record
+holds only non-Message-31 messages, each a fixed **2432-byte** frame (`RADAR_DATA_SIZE`) =
+12-byte legacy CTM header (`CTM_HEADER_SIZE`) + 16-byte message header + body. So the
+**message-type byte is at frame offset 15** (12+3) and a body starts at frame offset 28;
+Message 5's body is `message_size, pattern_type, pattern_number, …`, so the **VCP
+(pattern_number) is at frame offset 32** (28+4). `ReadVcpFromMetadata` walks every block at
+2432 strides, **stops at the first Message-31 (radial) frame** (Message 5 is always in the
+metadata that precedes the radials, and the 2432 stride doesn't hold inside variable-length
+radial data), matches type 5 (or reserved twin 7), and validates via `IsKnownVcp` (the
+`ClearAirVcps`/`PrecipVcps` sets) — a bad read still shows `VCP ?`, never a wrong number.
+**Subtle bug that made a first attempt a no-op:** the walk must NOT key off `firstRadial` /
+block elevations. The metadata record contains the ICAO string at an offset whose byte-22
+reads as a bogus elevation, so `ElevationOf` flags a metadata block as a radial and
+`firstRadial` collapses to 0 — a `blocks[0 .. firstRadial-1]` loop then scans nothing and
+every site shows `VCP ?`. Walking all blocks until the first true Message-31 sidesteps it.
+The `0.5°×N` SAILS count is independent (sweep-counting). Cosmetic only — rendering doesn't
+depend on it. Files: `Services/Level2RadarService.cs` (`ReadVcpFromMetadata`, `IsKnownVcp`,
+`ReadVcp`, `SelectLatestSweep`, `DescribeMode`).
 
-**SPC:** a scheduled/periodic refresh timer (currently manual on launch); empty-outlook
-handling; a fire-weather `dn`→color ramp (fire products lack embedded colors).
+**SPC:** periodic refresh timer is **DONE** (15-min `PeriodicTimer`, see SPC outlooks above);
+remaining: empty-outlook handling; a fire-weather `dn`→color ramp (fire products lack embedded
+colors).
 
 **Cleanup:** trim the dead inset data (`RegionProvider` alaska/hawaii,
 `MapRegion.InsetZoom`); de-hardcode the `mapdata` Desktop PMTiles path.

@@ -10,6 +10,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace OfflineMapsTest
@@ -57,30 +58,47 @@ namespace OfflineMapsTest
 
 			_ = InitializeMapAsync();
 
-			// Attempt a network refresh in the background: the app stays usable offline
-			// from the existing cache while fresh outlooks download. A scheduled/periodic
-			// refresh would later be driven from here (or a hosted timer) calling the
-			// same RefreshAllAsync.
+			// Attempt a network refresh in the background: the app stays usable offline from the
+			// existing cache while fresh outlooks download, then keeps refreshing on a timer so a
+			// long-running session doesn't sit on stale outlooks.
 			_ = RefreshOutlooksInBackgroundAsync();
 		}
 
+		// SPC products update a handful of times a day at scheduled issuances; poll periodically so
+		// we catch new ones. Conditional GETs make each cycle cheap (mostly 304s when unchanged).
+		private static readonly TimeSpan OutlookRefreshInterval = TimeSpan.FromMinutes(15);
+
 		private async Task RefreshOutlooksInBackgroundAsync()
 		{
-			try
+			// Refresh immediately on launch, then every OutlookRefreshInterval for the app's life.
+			var first = true;
+			using var timer = new PeriodicTimer(OutlookRefreshInterval);
+			do
 			{
-				var results = await _spcOutlookService.RefreshAllAsync();
-				var failed = results.Count(r => r.Status is SpcOutlookFetchStatus.FailedCacheKept
-					or SpcOutlookFetchStatus.FailedNoCache);
-				System.Diagnostics.Debug.WriteLine($"[SPC] refreshed {results.Count} products, {failed} failed.");
+				try
+				{
+					var results = await _spcOutlookService.RefreshAllAsync();
+					var updated = results.Count(r => r.Status is SpcOutlookFetchStatus.Updated);
+					var failed = results.Count(r => r.Status is SpcOutlookFetchStatus.FailedCacheKept
+						or SpcOutlookFetchStatus.FailedNoCache);
+					System.Diagnostics.Debug.WriteLine($"[SPC] refreshed {results.Count} products, {updated} updated, {failed} failed.");
 
-				// Re-apply the current outlook on the UI thread so a first-run (empty cache)
-				// overlay appears and the issued/valid readout picks up the new times.
-				DispatcherQueue.TryEnqueue(() => ViewModel.OnOutlooksRefreshed());
+					// Re-apply the current outlook on the UI thread on launch (so a first-run empty
+					// cache overlay appears and the issued/valid readout picks up times) and whenever
+					// a later cycle actually pulled new data — but not when a periodic cycle was all
+					// 304s, so we don't needlessly re-render the overlay every 15 minutes.
+					if (first || updated > 0)
+					{
+						DispatcherQueue.TryEnqueue(() => ViewModel.OnOutlooksRefreshed());
+					}
+				}
+				catch (Exception ex)
+				{
+					System.Diagnostics.Debug.WriteLine($"[SPC] refresh aborted: {ex.Message}");
+				}
+				first = false;
 			}
-			catch (Exception ex)
-			{
-				System.Diagnostics.Debug.WriteLine($"[SPC] refresh aborted: {ex.Message}");
-			}
+			while (await timer.WaitForNextTickAsync());
 		}
 
 		private async Task InitializeMapAsync()
@@ -286,6 +304,17 @@ namespace OfflineMapsTest
 		// available with a Window as the binding root.
 		public Visibility VisibleWhen(bool value) =>
 			value ? Visibility.Visible : Visibility.Collapsed;
+
+		// x:Bind function: the radar card's status-dot color for a freshness level (same reason
+		// as VisibleWhen — no converter lookup with a Window root).
+		public Microsoft.UI.Xaml.Media.Brush RadarDotBrush(RadarFreshness status) =>
+			new Microsoft.UI.Xaml.Media.SolidColorBrush(status switch
+			{
+				RadarFreshness.Live => Windows.UI.Color.FromArgb(0xFF, 0x3F, 0xB9, 0x50),   // green
+				RadarFreshness.Recent => Windows.UI.Color.FromArgb(0xFF, 0xE3, 0xB3, 0x41), // amber
+				RadarFreshness.Stale => Windows.UI.Color.FromArgb(0xFF, 0xF8, 0x5E, 0x5E),  // red
+				_ => Windows.UI.Color.FromArgb(0xFF, 0x6E, 0x7A, 0x86)                       // gray
+			});
 
 		/// <summary>
 		/// IMapView seam: the ONLY place that touches WebView2 / ExecuteScriptAsync.

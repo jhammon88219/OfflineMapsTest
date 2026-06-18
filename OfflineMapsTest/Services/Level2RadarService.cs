@@ -122,6 +122,12 @@ namespace OfflineMapsTest.Services
 		private byte[]? _liveHeader;
 		private readonly SortedDictionary<int, (byte[] block, int elev)> _liveBlocks = new();
 
+		// One-shot cache of the previous-volume fallback frame (used while the newest volume is
+		// still mid-scan). That volume is finished and immutable, so we build it once and reuse it
+		// across the repeated polls instead of re-downloading ~a volume's worth of chunks each time.
+		private string? _fallbackKey;
+		private RadarVolume? _fallbackVolume;
+
 		public async Task<RadarVolume?> GetLiveFrameAsync(RadarSite site, CancellationToken cancellationToken = default)
 		{
 			try
@@ -136,108 +142,43 @@ namespace OfflineMapsTest.Services
 				var (vol, start) = newest.Value;
 				RadarDebugLog.Log($"svc live {site.Id}: newest vol={vol} start={start:HH:mm:ss}Z age={(DateTimeOffset.UtcNow - start).TotalMinutes:0.0}m");
 
-				// The folder can hold chunks from several volumes (it's reused as the number
-				// cycles), so keep only the chunks of the target volume (matching start stamp).
-				var chunks = (await ListChunkObjectsAsync(site.Id, vol, cancellationToken))
-					.Where(c => ParseChunkStart(c.key) == start)
-					.ToList();
-				if (chunks.Count == 0 || !chunks.Any(c => c.kind == 'S'))
+				// Build from the newest volume, accumulating its chunks across polls (it's the
+				// growing in-progress one).
+				var frame = await BuildLiveFrameAsync(site, vol, start, useCache: true, cancellationToken);
+				if (frame is not null)
 				{
-					RadarDebugLog.Log($"svc live {site.Id}: vol={vol} no S chunk ({chunks.Count} chunks) -> can't decode");
-					return null; // no header chunk (older volume, partially expired) -> can't decode
-				}
-				chunks.Sort((a, b) => a.seq.CompareTo(b.seq));
-
-				// Switch volumes -> drop the cache and start accumulating the new one. Keyed by
-				// start too, since the same folder number is reused across cycles.
-				var key = $"{site.Id}/{vol}/{start:yyyyMMddHHmmss}";
-				if (_liveVolKey != key)
-				{
-					_liveVolKey = key;
-					_liveHeader = null;
-					_liveBlocks.Clear();
+					return frame;
 				}
 
-				// Download + decompress only chunks we don't already have. Each chunk is one LDM
-				// record: S = [24-byte header][control word][BZh…], I/E = [control word][BZh…].
-				var icao = System.Text.Encoding.ASCII.GetBytes(site.Id);
-				var added = 0;
-				foreach (var c in chunks)
+				// The newest volume has no usable single tilt yet — it's still mid-scan and hasn't
+				// finished its first 0.5° sweep. That can be a minute or two on slow clear-air VCPs
+				// (a volume is ~10 min), during which we'd otherwise return nothing and the mode +
+				// live frame stay "awaiting". Fall back to the PREVIOUS volume, which IS finished:
+				// its sweep is a bit older but usually still fresher than (or equal to) the archive
+				// newest, and it surfaces the scan mode right away. That volume is immutable, so we
+				// build it once and reuse it for the repeated polls until the newest catches up.
+				if (int.TryParse(vol, out var n) && n > 1)
 				{
-					if (_liveBlocks.Count >= LiveChunkCap)
+					var prevVol = (n - 1).ToString(CultureInfo.InvariantCulture);
+					var prevStart = await NewestVolumeStartAsync(site.Id, n - 1, cancellationToken);
+					if (prevStart is { } ps)
 					{
-						break;
-					}
-					if (_liveBlocks.ContainsKey(c.seq))
-					{
-						continue;
-					}
-					cancellationToken.ThrowIfCancellationRequested();
-
-					byte[] bytes;
-					using (var resp = await _http.GetAsync(ChunksBase + c.key, HttpCompletionOption.ResponseHeadersRead, cancellationToken))
-					{
-						if (!resp.IsSuccessStatusCode)
+						var fbKey = $"{site.Id}/{prevVol}/{ps:yyyyMMddHHmmss}";
+						if (_fallbackKey == fbKey && _fallbackVolume is not null)
 						{
-							if (c.kind == 'S')
-							{
-								return null; // header vanished mid-read; bail
-							}
-							continue; // a later chunk expired; use what we have
+							return _fallbackVolume;
 						}
-						bytes = await resp.Content.ReadAsByteArrayAsync(cancellationToken);
+						RadarDebugLog.Log($"svc live {site.Id}: newest vol={vol} not ready -> fall back to finished vol={prevVol}");
+						var fb = await BuildLiveFrameAsync(site, prevVol, ps, useCache: false, cancellationToken);
+						if (fb is not null)
+						{
+							_fallbackKey = fbKey;
+							_fallbackVolume = fb;
+						}
+						return fb;
 					}
-
-					var isS = c.kind == 'S';
-					if (isS && bytes.Length >= 24)
-					{
-						_liveHeader = bytes[..24];
-					}
-
-					var block = await Task.Run(() => DecompressChunk(bytes, isS), cancellationToken);
-					if (block is null)
-					{
-						continue;
-					}
-					_liveBlocks[c.seq] = (block, ElevationOf(block, icao));
-					added++;
 				}
-
-				if (_liveHeader is null)
-				{
-					RadarDebugLog.Log($"svc live {site.Id}: vol={vol} header chunk missing -> can't decode");
-					return null;
-				}
-
-				var ordered = _liveBlocks.Values.ToList();
-				var header = _liveHeader;
-				var sel = await Task.Run(() => SelectLatestSweep(header, ordered, icao), cancellationToken);
-				if (!sel.complete || sel.data is null)
-				{
-					RadarDebugLog.Log($"svc live {site.Id}: vol={vol} no complete 0.5° sweep yet ({_liveBlocks.Count} chunks, +{added}) -> fall back");
-					return null;
-				}
-
-				// Trust the parsed radial time only if it's plausibly within this volume's life
-				// (>= volume start, <= now); otherwise fall back to the volume-start timestamp so
-				// a bad parse can never produce a bogus age.
-				var nowUtc = DateTimeOffset.UtcNow;
-				var ts = sel.dataTime is { } dt && dt >= start.AddMinutes(-2) && dt <= nowUtc.AddMinutes(2)
-					? dt
-					: start;
-				var cacheFile = LiveCacheFileFor(site.Id, ts);
-				if (!File.Exists(cacheFile))
-				{
-					var temp = cacheFile + ".tmp";
-					await File.WriteAllBytesAsync(temp, sel.data, cancellationToken);
-					File.Move(temp, cacheFile, overwrite: true);
-				}
-				PruneLiveCache(site.Id, cacheFile);
-
-				var mode = DescribeMode(sel.vcp, sel.sweeps);
-				RadarDebugLog.Log($"svc live {site.Id}: vol={vol} BUILT latest 0.5° sweep @ {ts:HH:mm:ss}Z " +
-					$"(age {(DateTimeOffset.UtcNow - ts).TotalMinutes:0.0}m, {_liveBlocks.Count} chunks, {mode})");
-				return new RadarVolume(LiveUrlFor(site.Id, ts), site, ts, mode);
+				return null;
 			}
 			catch (OperationCanceledException)
 			{
@@ -249,6 +190,133 @@ namespace OfflineMapsTest.Services
 				RadarDebugLog.Log($"svc live {site.Id}: ERROR {ex.Message}");
 				return null;
 			}
+		}
+
+		// Builds a single-tilt live frame from one chunk volume's lowest 0.5° sweep. When useCache,
+		// accumulates chunks across polls in the _liveVol* cache (for the growing newest volume);
+		// otherwise it's a one-shot download into locals (for the previous-volume fallback). Returns
+		// null if the volume has no S header chunk or no complete 0.5° sweep yet.
+		private async Task<RadarVolume?> BuildLiveFrameAsync(RadarSite site, string vol, DateTimeOffset start, bool useCache, CancellationToken ct)
+		{
+			// The folder can hold chunks from several volumes (it's reused as the number cycles), so
+			// keep only the chunks of the target volume (matching start stamp).
+			var chunks = (await ListChunkObjectsAsync(site.Id, vol, ct))
+				.Where(c => ParseChunkStart(c.key) == start)
+				.ToList();
+			if (chunks.Count == 0 || !chunks.Any(c => c.kind == 'S'))
+			{
+				RadarDebugLog.Log($"svc live {site.Id}: vol={vol} no S chunk ({chunks.Count} chunks) -> can't decode");
+				return null; // no header chunk (older volume, partially expired) -> can't decode
+			}
+			chunks.Sort((a, b) => a.seq.CompareTo(b.seq));
+
+			// The newest (in-progress) volume reuses the cross-poll cache; the fallback uses locals.
+			SortedDictionary<int, (byte[] block, int elev)> blocks;
+			byte[]? header;
+			if (useCache)
+			{
+				// Switch volumes -> drop the cache and start accumulating the new one. Keyed by
+				// start too, since the same folder number is reused across cycles.
+				var cacheKey = $"{site.Id}/{vol}/{start:yyyyMMddHHmmss}";
+				if (_liveVolKey != cacheKey)
+				{
+					_liveVolKey = cacheKey;
+					_liveHeader = null;
+					_liveBlocks.Clear();
+				}
+				blocks = _liveBlocks;
+				header = _liveHeader;
+			}
+			else
+			{
+				blocks = new SortedDictionary<int, (byte[] block, int elev)>();
+				header = null;
+			}
+
+			// Download + decompress only chunks we don't already have. Each chunk is one LDM
+			// record: S = [24-byte header][control word][BZh…], I/E = [control word][BZh…].
+			var icao = System.Text.Encoding.ASCII.GetBytes(site.Id);
+			var added = 0;
+			foreach (var c in chunks)
+			{
+				if (blocks.Count >= LiveChunkCap)
+				{
+					break;
+				}
+				if (blocks.ContainsKey(c.seq))
+				{
+					continue;
+				}
+				ct.ThrowIfCancellationRequested();
+
+				byte[] bytes;
+				using (var resp = await _http.GetAsync(ChunksBase + c.key, HttpCompletionOption.ResponseHeadersRead, ct))
+				{
+					if (!resp.IsSuccessStatusCode)
+					{
+						if (c.kind == 'S')
+						{
+							return null; // header vanished mid-read; bail
+						}
+						continue; // a later chunk expired; use what we have
+					}
+					bytes = await resp.Content.ReadAsByteArrayAsync(ct);
+				}
+
+				var isS = c.kind == 'S';
+				if (isS && bytes.Length >= 24)
+				{
+					header = bytes[..24];
+					if (useCache)
+					{
+						_liveHeader = header;
+					}
+				}
+
+				var block = await Task.Run(() => DecompressChunk(bytes, isS), ct);
+				if (block is null)
+				{
+					continue;
+				}
+				blocks[c.seq] = (block, ElevationOf(block, icao));
+				added++;
+			}
+
+			if (header is null)
+			{
+				RadarDebugLog.Log($"svc live {site.Id}: vol={vol} header chunk missing -> can't decode");
+				return null;
+			}
+
+			var ordered = blocks.Values.ToList();
+			var hdr = header;
+			var sel = await Task.Run(() => SelectLatestSweep(hdr, ordered, icao), ct);
+			if (!sel.complete || sel.data is null)
+			{
+				RadarDebugLog.Log($"svc live {site.Id}: vol={vol} no complete 0.5° sweep yet ({blocks.Count} chunks, +{added})");
+				return null;
+			}
+
+			// Trust the parsed radial time only if it's plausibly within this volume's life
+			// (>= volume start, <= now); otherwise fall back to the volume-start timestamp so
+			// a bad parse can never produce a bogus age.
+			var nowUtc = DateTimeOffset.UtcNow;
+			var ts = sel.dataTime is { } dt && dt >= start.AddMinutes(-2) && dt <= nowUtc.AddMinutes(2)
+				? dt
+				: start;
+			var cacheFile = LiveCacheFileFor(site.Id, ts);
+			if (!File.Exists(cacheFile))
+			{
+				var temp = cacheFile + ".tmp";
+				await File.WriteAllBytesAsync(temp, sel.data, ct);
+				File.Move(temp, cacheFile, overwrite: true);
+			}
+			PruneLiveCache(site.Id, cacheFile);
+
+			var mode = DescribeMode(sel.vcp, sel.sweeps);
+			RadarDebugLog.Log($"svc live {site.Id}: vol={vol} BUILT latest 0.5° sweep @ {ts:HH:mm:ss}Z " +
+				$"(age {(DateTimeOffset.UtcNow - ts).TotalMinutes:0.0}m, {blocks.Count} chunks, {mode})");
+			return new RadarVolume(LiveUrlFor(site.Id, ts), site, ts, mode);
 		}
 
 		// Decompresses one chunk's single LDM record. S chunks carry the 24-byte volume header +
@@ -274,11 +342,20 @@ namespace OfflineMapsTest.Services
 			}
 		}
 
-		// From the decoded records, picks the LATEST complete 0.5° (elevation-1) sweep — the
-		// freshest base-reflectivity scan available, which in SAILS precip VCPs is a mid-volume
-		// re-scan newer than the volume start. Returns the minimal single-tilt buffer (24-byte
-		// header + leading metadata records + that sweep's radials), its actual radial time, the
-		// count of complete 0.5° sweeps (SAILS indicator), and the VCP number.
+		// From the decoded records, picks the LATEST complete lowest-tilt SURVEILLANCE (reflectivity)
+		// sweep — the freshest base scan available. In SAILS precip VCPs the 0.5° tilt is re-scanned
+		// mid-volume under its own, HIGHER elevation NUMBER but at the same elevation ANGLE, so we
+		// must key on angle, not number (keying on elevation-number 1 only ever found the volume-start
+		// scan and missed the SAILS re-scans — the "stuck several minutes behind during an outbreak"
+		// bug, verified against live KILX/KSHV volumes). We also require the cut to be a SURVEILLANCE
+		// cut (reflectivity present, NO velocity): split-cut precip VCPs scan 0.5° twice — a long-PRT
+		// surveillance cut (the reflectivity we render) and a short-PRT Doppler cut (velocity + range-
+		// folded reflectivity we don't want), at the same angle but different elevation numbers; the
+		// Doppler one carries a velocity moment, the surveillance one doesn't. Clear-air VCPs have a
+		// single combined cut at the bottom, so when no velocity-free cut exists we fall back to the
+		// latest low-tilt reflectivity cut. Returns the minimal single-tilt buffer (24-byte header +
+		// leading metadata records + that cut's radials), its actual radial time, the count of such
+		// low-tilt sweeps (SAILS indicator), and the VCP number.
 		private static (byte[]? data, bool complete, DateTimeOffset? dataTime, int sweeps, int vcp)
 			SelectLatestSweep(byte[] header, List<(byte[] block, int elev)> blocks, byte[] icao)
 		{
@@ -288,40 +365,73 @@ namespace OfflineMapsTest.Services
 				return (null, false, null, 0, 0);
 			}
 
-			var vcp = ReadVcp(blocks[firstRadial].block, icao);
+			// Authoritative VCP from the leading metadata record's Message 5. Fall back to the
+			// best-effort Message-31 VOL-block read only if Message 5 didn't yield a real VCP.
+			var vcp = ReadVcpFromMetadata(blocks);
+			if (!IsKnownVcp(vcp))
+			{
+				var radialVcp = ReadVcp(blocks[firstRadial].block, icao);
+				if (IsKnownVcp(radialVcp))
+				{
+					vcp = radialVcp;
+				}
+			}
 
-			// Walk the radials, grouping consecutive elevation-1 records into sweeps. A sweep is
-			// complete once a later record has a different elevation (the antenna moved on).
-			var sweeps = new List<(int start, int end)>();
+			// Group consecutive same-elevation-NUMBER records into cuts, capturing each cut's
+			// elevation ANGLE (median over its records — ignores the few settling radials at a
+			// cut's start) and which moments it carries (reflectivity / velocity).
+			var cuts = new List<(int start, int end, float angle, bool hasRef, bool hasVel)>();
 			var i = firstRadial;
 			while (i < blocks.Count)
 			{
-				if (blocks[i].elev == 1)
+				var start = i;
+				var num = blocks[i].elev;
+				var angles = new List<float>();
+				var hasRef = false;
+				var hasVel = false;
+				while (i < blocks.Count && blocks[i].elev == num)
 				{
-					var s = i;
-					while (i < blocks.Count && blocks[i].elev == 1)
+					var a = ElevationAngleOf(blocks[i].block, icao);
+					if (!float.IsNaN(a))
 					{
-						i++;
+						angles.Add(a);
 					}
-					var complete = i < blocks.Count; // terminated by a non-0.5° record
-					if (complete)
-					{
-						sweeps.Add((s, i));
-					}
-				}
-				else
-				{
+					hasRef |= HasMoment(blocks[i].block, Dref);
+					hasVel |= HasMoment(blocks[i].block, Dvel);
 					i++;
 				}
+				angles.Sort();
+				var angle = angles.Count > 0 ? angles[angles.Count / 2] : float.NaN;
+				cuts.Add((start, i, angle, hasRef, hasVel));
 			}
 
-			if (sweeps.Count == 0)
+			// Lowest tilt = the minimum angle among reflectivity cuts (the 0.5° base; a SAILS
+			// re-scan shares that exact angle). A cut at that tilt is the same physical 0.5° scan.
+			const float tiltTol = 0.12f; // SAILS re-scan reads the base angle within antenna jitter
+			var refCuts = cuts.Where(c => c.hasRef && !float.IsNaN(c.angle)).ToList();
+			if (refCuts.Count == 0)
 			{
 				return (null, false, null, 0, vcp);
 			}
+			var refAngle = refCuts.Min(c => c.angle);
 
-			var last = sweeps[^1];
-			var dataTime = ReadCollectionTime(blocks[last.start].block, icao);
+			bool LowTilt((int start, int end, float angle, bool hasRef, bool hasVel) c)
+				=> c.hasRef && !float.IsNaN(c.angle) && Math.Abs(c.angle - refAngle) <= tiltTol;
+
+			// Prefer surveillance cuts (reflectivity, no velocity); clear-air has one combined cut.
+			var surveillance = cuts.Where(c => LowTilt(c) && !c.hasVel).ToList();
+			var pool = surveillance.Count > 0 ? surveillance : cuts.Where(LowTilt).ToList();
+
+			// Complete = terminated by a later cut (the antenna moved on); the trailing in-progress
+			// cut of a live volume is excluded, so we never serve a half-scanned sweep.
+			var ready = pool.Where(c => c.end < blocks.Count).ToList();
+			if (ready.Count == 0)
+			{
+				return (null, false, null, pool.Count, vcp);
+			}
+
+			var selected = ready[^1]; // latest = freshest base scan (the SAILS re-scan when present)
+			var dataTime = ReadCollectionTime(blocks[selected.start].block, icao);
 
 			using var output = new MemoryStream(8 * 1024 * 1024);
 			output.Write(header, 0, header.Length);
@@ -329,16 +439,65 @@ namespace OfflineMapsTest.Services
 			{
 				output.Write(blocks[m].block, 0, blocks[m].block.Length);
 			}
-			for (var k = last.start; k < last.end; k++)
+			for (var k = selected.start; k < selected.end; k++)
 			{
 				output.Write(blocks[k].block, 0, blocks[k].block.Length);
 			}
 
-			return (output.ToArray(), true, dataTime, sweeps.Count, vcp);
+			return (output.ToArray(), true, dataTime, pool.Count, vcp);
+		}
+
+		// Level II message framing within a decompressed record (per the format ICD, matching
+		// the vendored decoder's constants): every non-Message-31 record is a fixed 2432-byte
+		// frame made of a 12-byte legacy CTM header + a 16-byte message header + the body. So
+		// the message-type byte sits at frame offset 12+3 = 15, and a message body begins at
+		// frame offset 12+16 = 28.
+		private const int CtmHeaderSize = 12;
+		private const int MessageHeaderSize = 16;
+		private const int RadarDataSize = 2432; // fixed frame size for non-Message-31 records
+
+		// Authoritative VCP from Message 5 (RDA Volume Coverage Pattern Data), which lives in the
+		// volume's leading metadata record. That record holds only non-Message-31 messages, so
+		// they sit at exact 2432-byte strides; the radial data (Message 31) is variable-length and
+		// always comes AFTER the metadata. So walk blocks in order at 2432 strides, stop the moment
+		// a Message-31 (radial) frame appears — Message 5 can't be past it, and the stride no longer
+		// holds in radial data — and otherwise return the first type-5 (or its reserved twin type-7)
+		// message's pattern_number: the 3rd halfword of the body (message_size, pattern_type,
+		// pattern_number, …), at frame offset 28+4 = 32. Returns 0 if no recognizable VCP is found.
+		//
+		// NOTE: this deliberately does NOT key off `firstRadial` / block elevations. The metadata
+		// record contains the ICAO string at offsets whose byte-22 can read as a bogus elevation,
+		// so ElevationOf flags a metadata block as a radial and `firstRadial` collapses to 0 — which
+		// is exactly what made an earlier firstRadial-gated version silently scan nothing.
+		private static int ReadVcpFromMetadata(List<(byte[] block, int elev)> blocks)
+		{
+			foreach (var (block, _) in blocks)
+			{
+				for (var pos = 0; pos + CtmHeaderSize + MessageHeaderSize + 6 <= block.Length; pos += RadarDataSize)
+				{
+					var msgType = block[pos + CtmHeaderSize + 3];
+					if (msgType == 31)
+					{
+						return 0; // reached radial data; the leading metadata (with Message 5) is behind us
+					}
+					if (msgType is not (5 or 7))
+					{
+						continue;
+					}
+					var body = pos + CtmHeaderSize + MessageHeaderSize;
+					var vcp = (block[body + 4] << 8) | block[body + 5];
+					if (IsKnownVcp(vcp))
+					{
+						return vcp;
+					}
+				}
+			}
+			return 0;
 		}
 
 		// VCP number from a Message 31 radial's Volume Data Constant Block (the "VOL" block),
-		// reached via the block pointer at ICAO+32; VCP is a 2-byte int at VOL+40. Best effort.
+		// reached via the block pointer at ICAO+32; VCP is a 2-byte int at VOL+40. Best-effort
+		// fallback for the rare volume whose Message 5 doesn't parse (see ReadVcpFromMetadata).
 		private static int ReadVcp(byte[] block, byte[] icao)
 		{
 			var ic = IndexOf(block, icao);
@@ -378,16 +537,18 @@ namespace OfflineMapsTest.Services
 		private static readonly HashSet<int> ClearAirVcps = new() { 31, 32, 35, 90 };
 		private static readonly HashSet<int> PrecipVcps = new() { 11, 12, 21, 112, 121, 211, 212, 215, 221 };
 
+		private static bool IsKnownVcp(int vcp) => ClearAirVcps.Contains(vcp) || PrecipVcps.Contains(vcp);
+
 		// Maps the VCP number to a human label. Clear-air VCPs scan ~every 10 min and never use
 		// SAILS; precip VCPs (12/212/215/…) run ~4-6 min and may insert extra 0.5° sweeps. An
 		// unrecognized number means the parse failed -> "VCP ?" (no category, since we can't tell).
 		private static string DescribeMode(int vcp, int sweeps)
 		{
-			var clearAir = ClearAirVcps.Contains(vcp);
-			if (!clearAir && !PrecipVcps.Contains(vcp))
+			if (!IsKnownVcp(vcp))
 			{
 				return $"VCP ? · 0.5°×{sweeps}";
 			}
+			var clearAir = ClearAirVcps.Contains(vcp);
 			var sails = sweeps > 1 ? $" · SAILS/MRLE ×{sweeps - 1}" : "";
 			return $"VCP {vcp} · {(clearAir ? "clear-air" : "precip")} · 0.5°×{sweeps}{sails}";
 		}
@@ -857,6 +1018,38 @@ namespace OfflineMapsTest.Services
 			// report 0 ("not a radial") rather than a bogus tilt boundary.
 			var elev = block[i + 22];
 			return elev is >= 1 and <= 32 ? elev : 0;
+		}
+
+		// Moment-block markers: a Message 31 generic data-moment block starts with a 'D' type byte
+		// + 3-char moment name. SAILS detection keys on reflectivity-vs-velocity presence.
+		private static readonly byte[] Dref = System.Text.Encoding.ASCII.GetBytes("DREF");
+		private static readonly byte[] Dvel = System.Text.Encoding.ASCII.GetBytes("DVEL");
+
+		// Elevation ANGLE (degrees) from the first Message 31 radial header in a block: a 4-byte
+		// big-endian float at ICAO+24. Unlike the elevation NUMBER, this is the same for the base
+		// 0.5° cut and its SAILS re-scan, which is how we recognize the re-scan. NaN if not found.
+		private static float ElevationAngleOf(byte[] block, byte[] icao)
+		{
+			var i = IndexOf(block, icao);
+			if (i < 0 || i + 28 > block.Length)
+			{
+				return float.NaN;
+			}
+			return System.Buffers.Binary.BinaryPrimitives.ReadSingleBigEndian(block.AsSpan(i + 24, 4));
+		}
+
+		// Whether a generic data-moment block (e.g. "DREF" reflectivity, "DVEL" velocity) is present
+		// with a plausible gate count (1..2000) — the count is a u16 eight bytes after the name. The
+		// gate-count check rejects coincidental ASCII matches in non-moment data.
+		private static bool HasMoment(byte[] block, byte[] name)
+		{
+			var p = IndexOf(block, name);
+			if (p < 0 || p + 10 > block.Length)
+			{
+				return false;
+			}
+			var gates = (block[p + 8] << 8) | block[p + 9];
+			return gates is >= 1 and <= 2000;
 		}
 
 		private static int IndexOf(byte[] haystack, byte[] needle)

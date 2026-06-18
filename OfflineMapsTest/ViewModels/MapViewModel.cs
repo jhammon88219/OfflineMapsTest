@@ -10,6 +10,19 @@ using OfflineMapsTest.Services;
 
 namespace OfflineMapsTest.ViewModels
 {
+	/// <summary>Freshness of a radar site's newest frame, driving the card's status dot.</summary>
+	public enum RadarFreshness
+	{
+		/// <summary>No loop / not yet ready.</summary>
+		None,
+		/// <summary>Newest frame within ~12 min — current.</summary>
+		Live,
+		/// <summary>~12–30 min old.</summary>
+		Recent,
+		/// <summary>Over ~30 min old — the site looks stale/offline.</summary>
+		Stale
+	}
+
 	/// <summary>
 	/// View model backing the map view. Owns the selectable basemap styles + current
 	/// selection, the SPC outlook day/product selection and overlay opacity, the radar site
@@ -87,21 +100,30 @@ namespace OfflineMapsTest.ViewModels
 		// Near-real-time "live" frame from the chunks bucket, appended as an extra newest frame
 		// (index _archiveCount) on top of the archive-bucket history. _hasLiveFrame says whether
 		// that slot exists; _liveFrame holds the current one (its time gates in-place updates).
-		// A faster poll (RunLiveFrameRefreshAsync) keeps it fresh between archive reloads; 60s
-		// catches each new volume's lowest tilt soon after it finishes (precip VCPs add SAILS
-		// 0.5° cuts ~every 1.5-2 min — clear-air VCPs only scan ~every 10 min, the real floor).
-		private const double LiveFrameRefreshSeconds = 60;
+		// A faster poll (RunLiveFrameRefreshAsync) keeps it fresh between archive reloads; 30s
+		// catches each new SAILS 0.5° re-scan (~every 1.5-3 min) soon after it finishes without
+		// much wasted traffic (clear-air VCPs only scan ~every 10 min, the real floor there).
+		private const double LiveFrameRefreshSeconds = 30;
 		// While no live frame exists yet (the load-time poll often hits a still-scanning volume),
 		// retry faster so the live data appears sooner; back to the normal cadence once we have one.
 		private const double LiveFrameRetrySeconds = 20;
 		private int _archiveCount;
 		private bool _hasLiveFrame;
 		private Models.RadarVolume? _liveFrame;
+		// Mode text (VCP/precip/SAILS) from the most recent successful live poll. Tracked
+		// SEPARATELY from _liveFrame because the mode is known from any decoded live volume even
+		// when we don't append it as a new frame — e.g. an offline/stale site (KVNX) whose newest
+		// chunks volume merely equals the archive newest, so it's correctly not appended, yet we
+		// still want to show its scan mode rather than "awaiting live frame" forever.
+		private string? _liveModeText;
 
 		// Debug card state: outcome of the most recent live-frame poll (for the on-map dev card).
 		private DateTimeOffset? _lastLivePollAt;
 		private string? _lastLivePollResult;
 		private string? _lastLiveError;
+		// When the next live-frame poll is scheduled (set by RunLiveFrameRefreshAsync before each
+		// wait), so the debug card can show a countdown to it.
+		private DateTimeOffset? _nextLivePollAt;
 
 		// Load timing for the current selection: from the site click to the first frame ready,
 		// and to ALL frames (final count, incl. the live frame) ready+rendered. Captured once per
@@ -293,6 +315,7 @@ namespace OfflineMapsTest.ViewModels
 				_selectedRadarOption = value;
 				OnPropertyChanged();
 				OnPropertyChanged(nameof(HasRadarLoop));
+				RaiseRadarCard();
 				_ = StartRadarLoopAsync(value?.Site);
 			}
 		}
@@ -387,6 +410,9 @@ namespace OfflineMapsTest.ViewModels
 
 				var state = _isLoopReady ? "ready" : $"loading {_readyCount}/{_frameCount}";
 				var pollAge = _lastLivePollAt is { } p ? $"{(now - p).TotalSeconds:0}s ago" : "—";
+				var nextPoll = _nextLivePollAt is { } np
+					? $"next in {Math.Max(0, (np - now).TotalSeconds):0}s"
+					: "next —";
 
 				var firstT = _firstFrameElapsed is { } ff ? $"{ff.TotalSeconds:0.0}s" : "…";
 				var allT = _allFramesElapsed is { } af ? $"{af.TotalSeconds:0.0}s" : "…";
@@ -399,7 +425,7 @@ namespace OfflineMapsTest.ViewModels
 				sb.AppendLine($"{site.Latitude:0.000}, {site.Longitude:0.000}      now {now.ToUniversalTime():HH:mm:ss}Z");
 				sb.AppendLine("──────────────────────────────────────");
 				sb.AppendLine(Row("frame", $"#{_currentFrameIndex + 1}/{_frameCount}   [{curSrc}]   live slot {(_hasLiveFrame ? "yes" : "no")}   {state}{(_isPlaying ? " · playing" : "")}"));
-				sb.AppendLine(Row("mode", _liveFrame?.ModeText ?? "— (awaiting live frame)"));
+				sb.AppendLine(Row("mode", _liveModeText ?? "— (awaiting live frame)"));
 				sb.AppendLine(Row("load", $"first {firstT}     all {allT}"));
 				sb.AppendLine(Row("current", $"{Z(cur)}     age {Age(cur)}"));
 				sb.AppendLine(Row("live", _liveFrame is null
@@ -407,7 +433,7 @@ namespace OfflineMapsTest.ViewModels
 					: $"{Z(liveT)}     age {Age(liveT)}"));
 				sb.AppendLine(Row("archive", $"{Z(archNewest)}     age {Age(archNewest)}"));
 				sb.AppendLine(Row("span", $"{Z(oldest)} → {Z(archNewest)}   ({_archiveCount} frames)"));
-				sb.AppendLine(Row("poll", $"{_lastLivePollResult ?? "—"}   ({pollAge})"));
+				sb.AppendLine(Row("poll", $"{_lastLivePollResult ?? "—"}   ({pollAge} · {nextPoll})"));
 				sb.AppendLine($"─── log ({Services.RadarDebugLog.TotalCount} events) ──────────────");
 				foreach (var line in Services.RadarDebugLog.Tail(8))
 				{
@@ -415,6 +441,131 @@ namespace OfflineMapsTest.ViewModels
 				}
 				return sb.ToString().TrimEnd();
 			}
+		}
+
+		// ── Polished radar card (the user-facing presentation). The monospace RadarDebugText
+		//    above feeds the collapsible "Diagnostics" expander; these are the headline values.
+		//    All recomputed together via RaiseRadarCard (frame changes + the 1s tick). ──
+
+		/// <summary>Card header, e.g. "KVNX · Vance AFB".</summary>
+		public string RadarCardTitle
+		{
+			get
+			{
+				var site = _selectedRadarOption?.Site;
+				if (site is null) return string.Empty;
+				return string.IsNullOrWhiteSpace(site.Name) ? site.Id : $"{site.Id} · {site.Name}";
+			}
+		}
+
+		/// <summary>Site coordinates for the card subheader.</summary>
+		public string RadarCardCoords
+		{
+			get
+			{
+				var site = _selectedRadarOption?.Site;
+				return site is null ? string.Empty : $"{site.Latitude:0.000}, {site.Longitude:0.000}";
+			}
+		}
+
+		/// <summary>Headline: the displayed frame's local time, or load progress.</summary>
+		public string RadarCardTime
+		{
+			get
+			{
+				if (_selectedRadarOption?.Site is null) return string.Empty;
+				// Show the displayed frame's time as soon as IT is available (the newest frame
+				// loads first, ~sub-second) rather than waiting for the whole loop to decode.
+				var t = (_currentFrameIndex >= 0 && _currentFrameIndex < _frameTimes.Length) ? _frameTimes[_currentFrameIndex] : null;
+				if (t is { } x) return x.ToLocalTime().ToString("h:mm tt");
+				return _frameCount > 0 ? $"Loading {_readyCount}/{_frameCount}…" : "Loading…";
+			}
+		}
+
+		/// <summary>"frame 10/10 · live" under the headline time.</summary>
+		public string RadarFrameDetail
+		{
+			get
+			{
+				if (_selectedRadarOption?.Site is null) return string.Empty;
+				var hasTime = _currentFrameIndex >= 0 && _currentFrameIndex < _frameTimes.Length && _frameTimes[_currentFrameIndex] is not null;
+				if (!hasTime) return string.Empty;
+				var src = (_hasLiveFrame && _currentFrameIndex == _archiveCount) ? "live" : "archive";
+				return $"frame {_currentFrameIndex + 1}/{_frameCount} · {src}";
+			}
+		}
+
+		/// <summary>Scan mode (VCP/precip/SAILS) from the latest live poll.</summary>
+		public string RadarModeText
+		{
+			get
+			{
+				if (_selectedRadarOption?.Site is null) return string.Empty;
+				return _liveModeText ?? (_isLoopReady ? "—" : "loading…");
+			}
+		}
+
+		/// <summary>How old the freshest available frame is, e.g. "2 min ago" / "66 min ago".</summary>
+		public string RadarAgeText
+		{
+			get
+			{
+				if (NewestFrameTime() is not { } t) return "—";
+				var mins = (DateTimeOffset.Now - t).TotalMinutes;
+				return mins < 1 ? "just now" : $"{mins:0} min ago";
+			}
+		}
+
+		/// <summary>Loop coverage, e.g. "12:36 – 1:12 PM · 10 frames".</summary>
+		public string RadarLoopSpanText
+		{
+			get
+			{
+				if (_selectedRadarOption?.Site is null || _archiveCount == 0) return string.Empty;
+				var oldest = _frameTimes.Length > 0 ? _frameTimes[0] : null;
+				var newest = (_archiveCount - 1 < _frameTimes.Length) ? _frameTimes[_archiveCount - 1] : null;
+				static string L(DateTimeOffset? x) => x?.ToLocalTime().ToString("h:mm tt") ?? "—";
+				return $"{L(oldest)} – {L(newest)} · {_frameCount} frames";
+			}
+		}
+
+		/// <summary>Freshness of the newest frame, driving the status dot color.</summary>
+		public RadarFreshness RadarStatus
+		{
+			get
+			{
+				// Based on the newest frame's age — available once that frame loads, no need to
+				// wait for the full loop. None (gray) until then.
+				if (NewestFrameTime() is not { } t) return RadarFreshness.None;
+				var mins = (DateTimeOffset.Now - t).TotalMinutes;
+				if (mins <= 12) return RadarFreshness.Live;
+				return mins <= 30 ? RadarFreshness.Recent : RadarFreshness.Stale;
+			}
+		}
+
+		// Freshest frame time available: the live slot if present, else the newest archive frame.
+		private DateTimeOffset? NewestFrameTime()
+		{
+			if (_selectedRadarOption?.Site is null) return null;
+			var live = (_hasLiveFrame && _archiveCount < _frameTimes.Length) ? _frameTimes[_archiveCount] : null;
+			var arch = (_archiveCount > 0 && _archiveCount - 1 < _frameTimes.Length) ? _frameTimes[_archiveCount - 1] : null;
+			if (live is { } l && arch is { } a) return l > a ? l : a;
+			return live ?? arch;
+		}
+
+		// Raises the polished card properties + the diagnostics text together (frame changes,
+		// the 1s tick, selection changes). One call so notifications can't drift out of sync.
+		private void RaiseRadarCard()
+		{
+			OnPropertyChanged(nameof(RadarDebugText));
+			OnPropertyChanged(nameof(RadarCardTitle));
+			OnPropertyChanged(nameof(RadarCardCoords));
+			OnPropertyChanged(nameof(RadarCardTime));
+			OnPropertyChanged(nameof(RadarFrameDetail));
+			OnPropertyChanged(nameof(RadarModeText));
+			OnPropertyChanged(nameof(RadarAgeText));
+			OnPropertyChanged(nameof(RadarLoopSpanText));
+			OnPropertyChanged(nameof(RadarStatus));
 		}
 
 		/// <summary>Whether the loop is currently playing.</summary>
@@ -656,17 +807,19 @@ namespace OfflineMapsTest.ViewModels
 				_archiveCount = 0;
 				_hasLiveFrame = false;
 				_liveFrame = null;
+				_liveModeText = null;
 				_frameTimes = Array.Empty<DateTimeOffset?>();
 				_loadedNewestKey = null;
 				_lastLivePollAt = null;
 				_lastLivePollResult = null;
+				_nextLivePollAt = null;
 				_lastLiveError = null;
 				_loopClickAt = null;
 				_firstFrameElapsed = null;
 				_allFramesElapsed = null;
 				OnPropertyChanged(nameof(MaxFrameIndex));
 				OnPropertyChanged(nameof(CurrentFrameTimeText));
-				OnPropertyChanged(nameof(RadarDebugText));
+				RaiseRadarCard();
 				if (_isMapReady)
 				{
 					await _mapService.ClearRadarAsync();
@@ -680,6 +833,7 @@ namespace OfflineMapsTest.ViewModels
 			_allFramesElapsed = null;
 			_initialLoadDone = false;
 			_loadInProgress = true;
+			_liveModeText = null; // forget the previous site's mode; the new site's poll re-sets it
 
 			// Note: no flyTo — load the radar at the user's current view; they pan/zoom freely.
 			var cts = new CancellationTokenSource();
@@ -706,7 +860,7 @@ namespace OfflineMapsTest.ViewModels
 				using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
 				while (await timer.WaitForNextTickAsync(ct))
 				{
-					OnPropertyChanged(nameof(RadarDebugText));
+					RaiseRadarCard();
 				}
 			}
 			catch (OperationCanceledException)
@@ -786,15 +940,21 @@ namespace OfflineMapsTest.ViewModels
 				await _mapService.BeginRadarLoopAsync(site);
 			}
 
-			// Newest first (immediate display), then the older frames.
-			await EnsureAndAddFrameAsync(site, keys, _frameCount - 1, ct);
-			for (var i = 0; i < _frameCount - 1 && !ct.IsCancellationRequested; i++)
+			// Newest archive frame first (immediate display).
+			await EnsureAndAddFrameAsync(site, keys, _archiveCount - 1, ct);
+
+			// Pull the live (chunks) frame + scan mode NEXT — before the older-frame backfill — so
+			// the card's time/mode/freshness populate in ~1-2 s instead of waiting out the full
+			// backfill (~5 s). It appends at index _archiveCount when fresher; the backfill then
+			// fills 0.._archiveCount-2 behind the already-populated card.
+			await RefreshLiveFrameAsync(site, ct);
+
+			// Backfill the older archive frames. Bound by _archiveCount, NOT _frameCount — the live
+			// frame above may have grown _frameCount, and these indices are archive-only.
+			for (var i = 0; i < _archiveCount - 1 && !ct.IsCancellationRequested; i++)
 			{
 				await EnsureAndAddFrameAsync(site, keys, i, ct);
 			}
-
-			// Then layer the near-real-time live frame on top when it's genuinely fresher.
-			await RefreshLiveFrameAsync(site, ct);
 		}
 
 		// Fetches the live (chunks) frame and, when it's newer than what's shown, applies it —
@@ -855,7 +1015,7 @@ namespace OfflineMapsTest.ViewModels
 				{
 					OnPropertyChanged(nameof(CurrentFrameTimeText));
 				}
-				OnPropertyChanged(nameof(RadarDebugText));
+				RaiseRadarCard();
 				return;
 			}
 
@@ -881,7 +1041,7 @@ namespace OfflineMapsTest.ViewModels
 			OnPropertyChanged(nameof(MaxFrameIndex));
 			OnPropertyChanged(nameof(CurrentFrameIndex));
 			OnPropertyChanged(nameof(CurrentFrameTimeText));
-			OnPropertyChanged(nameof(RadarDebugText));
+			RaiseRadarCard();
 
 			if (_isMapReady)
 			{
@@ -899,8 +1059,14 @@ namespace OfflineMapsTest.ViewModels
 				: live is null
 					? "null (no fresh tilt; using archive)"
 					: $"ok · {live.VolumeTime.ToUniversalTime():HH:mm:ss}Z";
+			// The decoded volume carries the scan mode regardless of whether it's fresh enough to
+			// append as a new frame — capture it so the mode shows even for a stale/offline site.
+			if (live?.ModeText is { } mode)
+			{
+				_liveModeText = mode;
+			}
 			Diag($"live poll -> {_lastLivePollResult}");
-			OnPropertyChanged(nameof(RadarDebugText));
+			RaiseRadarCard();
 		}
 
 		private async Task EnsureAndAddFrameAsync(RadarSite site, IReadOnlyList<string> keys, int index, CancellationToken ct)
@@ -959,7 +1125,7 @@ namespace OfflineMapsTest.ViewModels
 			{
 				_firstFrameElapsed = DateTimeOffset.UtcNow - click;
 				Diag($"TIMING first frame in {_firstFrameElapsed.Value.TotalSeconds:0.0}s");
-				OnPropertyChanged(nameof(RadarDebugText));
+				RaiseRadarCard();
 			}
 
 			OnPropertyChanged(nameof(CurrentFrameTimeText));
@@ -985,7 +1151,7 @@ namespace OfflineMapsTest.ViewModels
 			{
 				_allFramesElapsed = DateTimeOffset.UtcNow - click;
 				Diag($"TIMING all {_frameCount} frames in {_allFramesElapsed.Value.TotalSeconds:0.0}s");
-				OnPropertyChanged(nameof(RadarDebugText));
+				RaiseRadarCard();
 			}
 			_initialLoadDone = true;
 		}
@@ -1072,6 +1238,7 @@ namespace OfflineMapsTest.ViewModels
 				while (true)
 				{
 					var seconds = _hasLiveFrame ? LiveFrameRefreshSeconds : LiveFrameRetrySeconds;
+					_nextLivePollAt = DateTimeOffset.Now.AddSeconds(seconds);
 					await Task.Delay(TimeSpan.FromSeconds(seconds), ct);
 
 					if (!ReferenceEquals(_selectedRadarOption?.Site, site))

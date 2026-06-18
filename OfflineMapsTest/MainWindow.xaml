@@ -165,41 +165,98 @@
             </Button>
         </Border>
 
-        <!-- Radar developer diagnostics card (lower-left). Shown only while a radar loop is
-             active; floats above the ribbon. Monospace for column alignment. "Copy" puts the
-             full event timeline on the clipboard (and writes a file) for pasting into a report. -->
+        <!-- Selected radar site card (lower-left). Shown only while a radar loop is active;
+             floats above the ribbon. Uses the same theme brushes as the ribbon
+             (SolidBackgroundFillColorBaseBrush / CardStrokeColorDefaultBrush + the standard
+             text-fill brushes) so the two panels match. The status dot keeps its semantic
+             Live/Recent/Stale colors. Polished site readout up top; the full developer
+             diagnostics + event log live in the collapsible "Diagnostics" expander. -->
         <Border HorizontalAlignment="Left"
                 VerticalAlignment="Bottom"
                 Margin="14,0,0,150"
-                MaxWidth="500"
+                MinWidth="270"
+                MaxWidth="380"
                 CornerRadius="8"
-                Padding="14,12"
-                Background="#F00F1216"
-                BorderBrush="#3300E0FF"
+                Padding="16,14"
+                Background="{ThemeResource SolidBackgroundFillColorBaseBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                 BorderThickness="1"
                 Visibility="{x:Bind VisibleWhen(ViewModel.HasRadarLoop), Mode=OneWay}">
-            <StackPanel Spacing="8">
-                <TextBlock Text="{x:Bind ViewModel.RadarDebugText, Mode=OneWay}"
-                           FontFamily="Cascadia Mono, Consolas"
-                           FontSize="13"
-                           LineHeight="19"
-                           Foreground="#EAF6FF"
-                           IsTextSelectionEnabled="True"
-                           TextWrapping="Wrap"/>
-                <StackPanel Orientation="Horizontal" Spacing="6">
-                    <Button Content="Copy debug log"
-                            Padding="8,3"
-                            FontSize="11"
-                            Click="OnCopyRadarDebugClick"/>
-                    <Button Content="Clear"
-                            Padding="8,3"
-                            FontSize="11"
-                            Click="OnClearRadarDebugClick"/>
-                    <TextBlock x:Name="RadarDebugStatus"
-                               VerticalAlignment="Center"
-                               FontSize="11"
-                               Foreground="#80E6F7FF"/>
+            <StackPanel Spacing="12">
+
+                <!-- Header: status dot + site title -->
+                <StackPanel Orientation="Horizontal" Spacing="9">
+                    <Ellipse Width="10" Height="10" VerticalAlignment="Center"
+                             Fill="{x:Bind RadarDotBrush(ViewModel.RadarStatus), Mode=OneWay}"/>
+                    <StackPanel>
+                        <TextBlock Text="{x:Bind ViewModel.RadarCardTitle, Mode=OneWay}"
+                                   FontSize="16" FontWeight="SemiBold"
+                                   Foreground="{ThemeResource TextFillColorPrimaryBrush}"/>
+                        <TextBlock Text="{x:Bind ViewModel.RadarCardCoords, Mode=OneWay}"
+                                   FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                    </StackPanel>
                 </StackPanel>
+
+                <!-- Headline: current frame time + frame detail -->
+                <StackPanel Spacing="1">
+                    <TextBlock Text="{x:Bind ViewModel.RadarCardTime, Mode=OneWay}"
+                               FontSize="28" FontWeight="Bold"
+                               Foreground="{ThemeResource TextFillColorPrimaryBrush}"/>
+                    <TextBlock Text="{x:Bind ViewModel.RadarFrameDetail, Mode=OneWay}"
+                               FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                </StackPanel>
+
+                <!-- Facts: mode / data age / loop span -->
+                <StackPanel Spacing="6">
+                    <StackPanel Orientation="Horizontal" Spacing="10">
+                        <TextBlock Text="Mode" Width="46" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                        <TextBlock Text="{x:Bind ViewModel.RadarModeText, Mode=OneWay}"
+                                   FontSize="12" Foreground="{ThemeResource TextFillColorPrimaryBrush}" TextWrapping="Wrap"/>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="10">
+                        <TextBlock Text="Updated" Width="46" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                        <TextBlock Text="{x:Bind ViewModel.RadarAgeText, Mode=OneWay}"
+                                   FontSize="12" Foreground="{ThemeResource TextFillColorPrimaryBrush}"/>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="10">
+                        <TextBlock Text="Loop" Width="46" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                        <TextBlock Text="{x:Bind ViewModel.RadarLoopSpanText, Mode=OneWay}"
+                                   FontSize="12" Foreground="{ThemeResource TextFillColorPrimaryBrush}"/>
+                    </StackPanel>
+                </StackPanel>
+
+                <!-- Collapsible developer diagnostics + event log -->
+                <Expander Header="Diagnostics"
+                          ExpandDirection="Down"
+                          HorizontalAlignment="Stretch"
+                          HorizontalContentAlignment="Stretch"
+                          Padding="0"
+                          Background="Transparent"
+                          BorderThickness="0">
+                    <StackPanel Spacing="8">
+                        <TextBlock Text="{x:Bind ViewModel.RadarDebugText, Mode=OneWay}"
+                                   FontFamily="Cascadia Mono, Consolas"
+                                   FontSize="12"
+                                   LineHeight="18"
+                                   Foreground="{ThemeResource TextFillColorPrimaryBrush}"
+                                   IsTextSelectionEnabled="True"
+                                   TextWrapping="Wrap"/>
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <Button Content="Copy debug log"
+                                    Padding="8,3"
+                                    FontSize="11"
+                                    Click="OnCopyRadarDebugClick"/>
+                            <Button Content="Clear"
+                                    Padding="8,3"
+                                    FontSize="11"
+                                    Click="OnClearRadarDebugClick"/>
+                            <TextBlock x:Name="RadarDebugStatus"
+                                       VerticalAlignment="Center"
+                                       FontSize="11"
+                                       Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                        </StackPanel>
+                    </StackPanel>
+                </Expander>
             </StackPanel>
         </Border>
     </Grid>
