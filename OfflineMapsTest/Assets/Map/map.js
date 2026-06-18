@@ -283,6 +283,9 @@ try {
     window.setRadarOpacity = function (opacity) {
         if (window.RadarLayer) window.RadarLayer.setOpacity(map, opacity);
     };
+    window.setRadarProduct = function (product) {
+        if (window.RadarLayer) window.RadarLayer.setProduct(map, product);
+    };
 
     // Radar site markers: neon rectangle buttons labeled with the site id at each site's
     // location; click to select. These are DOM overlays (maplibregl.Marker), so they auto-

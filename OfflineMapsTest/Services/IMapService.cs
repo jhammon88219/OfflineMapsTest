@@ -45,6 +45,9 @@ namespace OfflineMapsTest.Services
 		/// <summary>Sets the radar layer opacity (0-1).</summary>
 		Task SetRadarOpacityAsync(double opacity);
 
+		/// <summary>Sets the rendered radar moment: "reflectivity" or "velocity".</summary>
+		Task SetRadarProductAsync(string product);
+
 		/// <summary>
 		/// Provides the radar sites to the map as clickable on-map markers. JSON is an array
 		/// of <c>{ id, name, lng, lat }</c>.

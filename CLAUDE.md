@@ -59,15 +59,33 @@ MVVM with interface seams, hand-wired in the `MainWindow` constructor (no DI con
 
 ## What's built
 
-- **Bottom control ribbon** (themed bar): `Radar Opacity | Day | Outlook | Opacity |
-  Basemap | Hide/Show Sites | collapse`, with a radar **loop bar** (play/pause + scrubber
-  + timestamp) shown above it while a loop is active, and an **issued/valid readout** line
-  (above the controls) while an outlook with known times is shown. The **Day combo is
-  labeled by date** ("Day 1 · Sat Jun 14"). **Radar sites are picked by clicking
-  on-map markers** (RadarScope-style), not a dropdown. The **Hide/Show Sites** button
-  toggles all site markers (`setRadarSitesVisible`); it's independent of the radar layer —
-  hiding the markers leaves an active loop rendering. Collapsing hides the ribbon and shows
-  a small "Controls" reveal handle.
+- **Tool-window docks (static mock of a VS-style dock — NOT real drag/dock yet).** The old bottom
+  ribbon AND the two floating cards (radar site card, outlook info card) are **GONE** — all absorbed
+  into two full-height overlay "docking stations". The **stations themselves are transparent** (incl.
+  the left "Tools" title bar) — the map shows through the gaps between/around the windows; only the
+  tool-window **cards** are opaque. Each card = a `Border` styled by `ToolCardStyle` (5px margin so
+  they don't touch, rounded, `CardBackgroundFillColorDefaultBrush`, `CardStrokeColorDefaultBrush`
+  border) + a `ToolCaptionStyle` caption bar (inert pin/✕/… glyphs). **A card's border highlights to
+  the system accent while it holds focus** (`MainWindow.OnCardGotFocus`, a routed `GotFocus`; the
+  last-focused card stays lit, VS-style; the read-only Selected Site card has no focusable content so
+  it doesn't light). The shared `Style`s live in `Grid.Resources` (Window has no `Window.Resources`).
+  **Left station**
+  (`MapViewModel.IsDockExpanded`, collapses via `ToggleDock` to a left-edge "Tools" reveal button) =
+  **four equal-height** tool windows: **Radar Sites** (a real `ListView` of `MapViewModel.RadarSites`;
+  row-click → `OnRadarSiteClicked`, same path as an on-map marker), **Radar Loop** (play/pause + scrubber
+  + frame time + Radar Opacity + Show/Hide Sites button, with disabled Product/Tilt/Stop stubs),
+  **Outlook** (Day/Product/Opacity/**Basemap** selectors — Basemap had no other home after the ribbon),
+  and **Outlook Details** (issued/effective + the SPC discussion). **Right station** = a **single**
+  "Selected Site" tool window (the radar readout: status dot, title, frame time/detail, mode, age, loop
+  span), shown while a site is selected (`HasRadarLoop`); with one tool window it takes the full height
+  and its content is **top-aligned** (hugs the top, empty below) — showcasing default top docking. All
+  controls bind to the **same VM properties** the ribbon/cards used (move, not rewrite). The dev
+  **diagnostics/logging stays in the VM** (`RadarDebugText` + `Services.RadarDebugLog`) but is no longer
+  shown (the Diagnostics expander + Copy/Clear were dropped). Still a static mock: caption glyphs +
+  Stop/Product/Tilt are inert; no drag/dock/tear-out; the eventual real version extracts a reusable
+  `ToolWindow` control. **The Day combo is labeled by date** ("Day 1 · Sat Jun 14"); **radar sites are
+  also pickable by clicking on-map markers** (RadarScope-style); **Show/Hide Sites** toggles all markers
+  (`setRadarSitesVisible`), independent of the radar layer.
 - App starts **maximized**; basemap defaults to **Data Viz Black**; outlook opacity
   defaults to **0.05**; radar defaults to **None** at **0.85** opacity.
 - **SPC outlooks:** `SpcOutlookService` fetches/caches all 23 SPC products (convective
@@ -107,8 +125,8 @@ MVVM with interface seams, hand-wired in the `MainWindow` constructor (no DI con
   the C# time-parsing are untouched. (History: this was first mis-rendered as one shared hatch
   for all CIG levels — the actual per-group encoding lives in `LABEL`/`DN`=2·group, verified
   against cached GeoJSON.) Outlook sits below the basemap labels.
-- **SPC outlook info card (top-right):** shown while an outlook (not "None") is selected; same
-  theme brushes as the ribbon/radar card. Header (`Day N · Type`) + **Issued/Effective** (from the
+- **SPC outlook info (now the left dock's "Outlook Details" tool window; was a top-right floating
+  card):** shown while an outlook (not "None") is selected; same theme brushes as the dock. Header (`Day N · Type`) + **Issued/Effective** (from the
   cached GeoJSON times) + the **SPC forecast-discussion text** in a scrollable monospace block.
   The discussion is scraped from SPC's HTML page's `<pre>` block by
   `ISpcOutlookService.GetNarrativeAsync` (`SpcOutlookService`: `NarrativeUrlFor` maps day→page —
@@ -345,15 +363,16 @@ whole volume to finish + aggregate.
   `currentFrame`, and `applyFrameResult` routes every show through `showCurrent`, which **re-adds
   the layer whenever it's missing**. So any decode (pending target, first arrival, or the current
   frame) restores the layer, paused or playing.
-- **Radar site card + event log:** a lower-left on-map card (shown while a loop is active, ticked
-  1 s by `RunDebugTickAsync`). The **top** is a polished site readout — status dot (color from
+- **Radar site readout (now the right dock's "Selected Site" tool window; was a floating card):**
+  shown while a loop is active, ticked 1 s by `RunDebugTickAsync`. A polished site readout — status dot (color from
   `MapViewModel.RadarStatus` / `RadarFreshness` Live/Recent/Stale by newest-frame age, mapped to a
   brush by `MainWindow.RadarDotBrush`), title (`RadarCardTitle`), current frame time + detail
   (`RadarCardTime`/`RadarFrameDetail`), and `RadarModeText`/`RadarAgeText`/`RadarLoopSpanText` rows.
   All those card props + the diagnostics text are raised together by `RaiseRadarCard()` (replacing
   the old scattered `OnPropertyChanged(nameof(RadarDebugText))` calls). The full developer
-  diagnostics live in a **collapsible "Diagnostics" `Expander`** (collapsed by default) bound to the
-  same `MapViewModel.RadarDebugText` monospace blob — which still reports site, current frame
+  diagnostics (**the "Diagnostics" `Expander` + Copy/Clear were REMOVED from the UI in the dock
+  rewrite — not shown for now**, but `MapViewModel.RadarDebugText` and the log below still exist and
+  can be re-surfaced) was the `RadarDebugText` monospace blob — which still reports site, current frame
   #/count + source (ARCHIVE/LIVE), **load timings** (`load:` line — seconds from the site click
   to the first frame, and to all frames incl. the live one, rendered; captured once per click,
   frozen after the initial load so the ~60 s live refreshes don't overwrite them, also logged as
@@ -370,11 +389,45 @@ whole volume to finish + aggregate.
 
 ## Next steps
 
-**Radar:** the full ~160-site list is now bundled (above) — remaining is a **searchable /
-decluttered picker** (160 markers at once is busy; the Hide/Show Sites toggle is a stopgap);
-a velocity product + ramp; proper dual-pol clutter filtering (CC-based) instead of the blunt
-`MIN_DBZ`; make the loop refresh *incremental* (id-keyed frames) so it doesn't re-decode
-cached frames on reload. The chunks-bucket live frame is **done** (see "Radar live frame");
+**Velocity product — IN PROGRESS (data + decode done; render + UI pending).** Base velocity at
+0.5° lives in the Doppler (CD) companion of the split-cut surveillance (CS) reflectivity cut —
+same angle, next elevation NUMBER (verified during the SAILS work). (1, DONE) `Level2RadarService.
+SelectLatestSweep` now also emits the **paired Doppler cut** (the cut right after the selected CS,
+when it's a low-tilt velocity cut) into the live `.V06`, written AFTER the CS so the CS stays the
+lower elevation number — keeping the JS `Math.min(elevations)` correct for reflectivity; clear-air
+VCPs carry velocity in their single combined cut so no companion is added. (2, DONE) `radar-decode.js`
+refactored the gate loop into a shared `buildGates(radials, …, colorFn)`; `buildReflectivity` and a
+new `buildVelocity` (finds the velocity elevation via `findVelocityElevation` → `getHighresVelocity`,
+divergent green↔red `VEL_RAMP`) both use it; `decodeAndBuild` now returns `{geom, velGeom}` (both
+with baked colors, so the host can toggle product without re-decoding). (3, DONE) `radar-worker.js`
+posts both geoms zero-copy; `radar.js` stores `{positions,colors,count, velPositions,velColors,velCount}`
+per frame, tracks `product` + `uploadedProduct`, and renders the selected moment (re-uploads on a
+product switch). (4, DONE) `window.setRadarProduct` (map.js) → `RadarLayer.setProduct`;
+`IMapService.SetRadarProductAsync`; `MapViewModel.RadarProductIndex` (0=refl, 1=vel) bound to the
+Radar Loop tool window's now-enabled **Product** combo. So velocity is **visible on the live/newest
+frame** now. (5, TODO) the **archive path** (`TryExtractLowestTilt`) still keeps only the surveillance
+cut, so older loop frames have no velocity (selecting Velocity + scrubbing back = blank) — extend it
+(angle-based, to avoid keeping clear-air's 0.9° cut) so the whole loop has velocity. (VERIFY at
+runtime: the `VEL_RAMP` range/sign assumes the decoder returns m/s, toward-radar negative; adjust if
+the colors read wrong.) v1 renders **raw (aliased)** velocity; dealiasing + storm-relative velocity
+(SRM = base − storm-motion vector) are later.
+  - **⚠️ KNOWN BUG (next to fix): velocity "frame disappears after the first update and doesn't come
+    back."** Same class as the reflectivity "tiles vanish and never come back" bug (see the
+    "Layer re-add" notes above — `radar.js` `pendingFrame`/`showCurrent`/`uploadedFrame`). With
+    Product=Velocity, the live/newest frame shows velocity, but after the first live refresh (~30 s)
+    or 5-min reload it goes blank and stays blank. Where to look: (a) `radar.js` `render()` now picks
+    geometry by `product` and re-uploads when `uploadedFrame !== currentFrame || uploadedProduct !==
+    product` — confirm the re-decode/re-add paths in `applyFrameResult` (`pending`/`first`/`re-add`)
+    actually re-upload the *velocity* buffer (they set `uploadedFrame=-1`, which should force it);
+    (b) when a frame has **no** velGeom (`pos && col` is false), the upload is skipped and `cnt===0`
+    returns early — so if an update lands the current frame on a velocity-less frame (every archive
+    frame today, per step 5; or a live `.V06` where `SelectLatestSweep` found no paired Doppler cut
+    that cycle) it renders blank; (c) check whether the live in-place update (`ApplyLiveFrameAsync` →
+    `AddRadarFrameAsync` at `_archiveCount`) re-decodes a `.V06` that still contains the Doppler cut.
+    Likely interacts with step 5 (once all frames carry velocity, the "lands on a velocity-less frame"
+    path goes away) but verify the layer-re-add path independently. **Radar (other):** a **searchable / decluttered** site picker (160 markers is busy); proper
+dual-pol clutter filtering (CC-based) instead of the blunt `MIN_DBZ`; make the loop refresh
+*incremental* (id-keyed frames) so it doesn't re-decode cached frames on reload. The chunks-bucket live frame is **done** (see "Radar live frame");
 a possible follow-up is making the live frame its *own* extra step rather than just refreshing
 the trailing slot, and tuning the ~60 s poll.
 

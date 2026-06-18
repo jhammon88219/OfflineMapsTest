@@ -433,15 +433,40 @@ namespace OfflineMapsTest.Services
 			var selected = ready[^1]; // latest = freshest base scan (the SAILS re-scan when present)
 			var dataTime = ReadCollectionTime(blocks[selected.start].block, icao);
 
+			// Also emit the PAIRED Doppler cut (the velocity scan) so the decoded volume carries both
+			// moments. In a split-cut precip VCP the 0.5° tilt is the surveillance cut (reflectivity,
+			// no velocity) immediately followed by its Doppler companion (velocity), at the same angle
+			// but the next elevation NUMBER. Taking the cut right after `selected` keeps the
+			// surveillance cut the LOWER number, so the JS `Math.min(elevations)` still picks it for
+			// reflectivity; the higher-numbered Doppler cut supplies velocity. Clear-air VCPs have one
+			// combined cut (it carries velocity itself), so there's no separate companion to add.
+			var selIdx = cuts.FindIndex(c => c.start == selected.start);
+			(int start, int end)? velCut = null;
+			if (selIdx >= 0 && selIdx + 1 < cuts.Count)
+			{
+				var next = cuts[selIdx + 1];
+				if (LowTilt(next) && next.hasVel && next.end < blocks.Count)
+				{
+					velCut = (next.start, next.end);
+				}
+			}
+
 			using var output = new MemoryStream(8 * 1024 * 1024);
 			output.Write(header, 0, header.Length);
 			for (var m = 0; m < firstRadial; m++) // leading metadata (Msg 5/13/15/18/…) the decoder needs
 			{
 				output.Write(blocks[m].block, 0, blocks[m].block.Length);
 			}
-			for (var k = selected.start; k < selected.end; k++)
+			for (var k = selected.start; k < selected.end; k++) // surveillance (reflectivity) cut
 			{
 				output.Write(blocks[k].block, 0, blocks[k].block.Length);
+			}
+			if (velCut is { } vc) // paired Doppler (velocity) cut, written after -> higher elevation
+			{
+				for (var k = vc.start; k < vc.end; k++)
+				{
+					output.Write(blocks[k].block, 0, blocks[k].block.Length);
+				}
 			}
 
 			return (output.ToArray(), true, dataTime, pool.Count, vcp);
