@@ -199,14 +199,16 @@
                 const col = vel ? f.velColors : f.colors;
                 const cnt = vel ? f.velCount : f.count;
                 try {
-                    // Re-upload when the frame OR the product changed.
-                    if (uploadedFrame !== currentFrame || uploadedProduct !== product) {
-                        if (pos && col) {
-                            glc.bindBuffer(glc.ARRAY_BUFFER, posBuf);
-                            glc.bufferData(glc.ARRAY_BUFFER, pos, glc.STATIC_DRAW);
-                            glc.bindBuffer(glc.ARRAY_BUFFER, colorBuf);
-                            glc.bufferData(glc.ARRAY_BUFFER, col, glc.STATIC_DRAW);
-                        }
+                    // Re-upload when the frame OR the product changed. Only latch the buffers as
+                    // current once an upload actually happened: a frame that lacks this product's
+                    // geometry (e.g. an archive frame in Velocity mode, or a live volume whose Doppler
+                    // companion hadn't finished scanning) must NOT mark uploadedFrame, or the buffers
+                    // stay stale-but-marked and a later frame that DOES carry the geometry is skipped.
+                    if ((uploadedFrame !== currentFrame || uploadedProduct !== product) && pos && col) {
+                        glc.bindBuffer(glc.ARRAY_BUFFER, posBuf);
+                        glc.bufferData(glc.ARRAY_BUFFER, pos, glc.STATIC_DRAW);
+                        glc.bindBuffer(glc.ARRAY_BUFFER, colorBuf);
+                        glc.bufferData(glc.ARRAY_BUFFER, col, glc.STATIC_DRAW);
                         uploadedFrame = currentFrame;
                         uploadedProduct = product;
                     }

@@ -430,26 +430,57 @@ namespace OfflineMapsTest.Services
 				return (null, false, null, pool.Count, vcp);
 			}
 
+			// Pick the cut to render and emit its PAIRED Doppler (velocity) cut so the decoded volume
+			// carries both moments. In a split-cut precip VCP the 0.5° tilt is the surveillance cut
+			// (reflectivity, no velocity) immediately followed by its Doppler companion (velocity), at
+			// the same angle but the next elevation NUMBER. Writing the companion right AFTER the
+			// surveillance keeps the surveillance the LOWER number, so the JS `Math.min(elevations)`
+			// still picks it for reflectivity and the higher-numbered Doppler supplies velocity.
+			// Clear-air VCPs have one combined cut (it carries velocity itself), so no companion.
+			//
+			// The companion may still be mid-scan on the freshest live volume — we include it anyway
+			// (a partial velocity sweep is fine), so the newest frame the user is watching carries
+			// velocity. We only step back to an earlier surveillance if the freshest one has NO
+			// companion cut at all (a rare surveillance-only re-scan); keeping a consistent adjacent
+			// pair preserves the JS `Math.min(elevations)` reflectivity pick. If no surveillance has a
+			// companion, we fall back to the freshest surveillance, reflectivity-only.
 			var selected = ready[^1]; // latest = freshest base scan (the SAILS re-scan when present)
-			var dataTime = ReadCollectionTime(blocks[selected.start].block, icao);
-
-			// Also emit the PAIRED Doppler cut (the velocity scan) so the decoded volume carries both
-			// moments. In a split-cut precip VCP the 0.5° tilt is the surveillance cut (reflectivity,
-			// no velocity) immediately followed by its Doppler companion (velocity), at the same angle
-			// but the next elevation NUMBER. Taking the cut right after `selected` keeps the
-			// surveillance cut the LOWER number, so the JS `Math.min(elevations)` still picks it for
-			// reflectivity; the higher-numbered Doppler cut supplies velocity. Clear-air VCPs have one
-			// combined cut (it carries velocity itself), so there's no separate companion to add.
-			var selIdx = cuts.FindIndex(c => c.start == selected.start);
 			(int start, int end)? velCut = null;
-			if (selIdx >= 0 && selIdx + 1 < cuts.Count)
+
+			// The Doppler companion immediately after a surveillance cut, if any. The companion is
+			// identified by VELOCITY at the SAME angle — NOT by reflectivity (a short-PRT Doppler
+			// cut's range-folded reflectivity is inconsistent and can fail the HasMoment gate-count
+			// check), and NOT by being terminated/complete: on the freshest live volume the 0.5°
+			// Doppler is usually the TRAILING in-progress cut (the next tilt hasn't started), so
+			// requiring `next.end < blocks.Count` dropped velocity from exactly the newest frame —
+			// the live-frame "velocity disappears and never returns" bug. A partial Doppler sweep
+			// renders the azimuths scanned so far and fills in as the volume grows; the angle+velocity
+			// test still rejects the next-tilt cut.
+			(int start, int end)? DopplerCompanion(int surveillanceStart)
 			{
-				var next = cuts[selIdx + 1];
-				if (LowTilt(next) && next.hasVel && next.end < blocks.Count)
+				var si = cuts.FindIndex(c => c.start == surveillanceStart);
+				if (si < 0 || si + 1 >= cuts.Count) return null;
+				var next = cuts[si + 1];
+				var sameAngle = !float.IsNaN(next.angle) && Math.Abs(next.angle - refAngle) <= tiltTol;
+				return sameAngle && next.hasVel
+					? (next.start, next.end)
+					: ((int start, int end)?)null;
+			}
+
+			if (surveillance.Count > 0)
+			{
+				for (var s = ready.Count - 1; s >= 0; s--)
 				{
-					velCut = (next.start, next.end);
+					if (DopplerCompanion(ready[s].start) is { } comp)
+					{
+						selected = ready[s];
+						velCut = comp;
+						break;
+					}
 				}
 			}
+
+			var dataTime = ReadCollectionTime(blocks[selected.start].block, icao);
 
 			using var output = new MemoryStream(8 * 1024 * 1024);
 			output.Write(header, 0, header.Length);
@@ -962,8 +993,7 @@ namespace OfflineMapsTest.Services
 			TryExtractLowestTilt(raw, siteId, out _);
 
 		// As above, but also reports whether the lowest tilt is definitely COMPLETE — i.e. we
-		// reached the first elevation-2 record. The chunks path uses this to tell a finished
-		// tilt 1 (serve it) from one still mid-scan in an in-progress volume (wait / fall back).
+		// reached a radial of the next (higher-angle) tilt, proving tilt 1 was fully scanned.
 		// The archive path always sees a full volume, so the flag is true there.
 		private static byte[]? TryExtractLowestTilt(byte[] raw, string siteId, out bool completedTilt)
 		{
@@ -978,9 +1008,23 @@ namespace OfflineMapsTest.Services
 			using var output = new MemoryStream(8 * 1024 * 1024);
 			output.Write(raw, 0, headerSize);
 
+			// Keep the whole lowest tilt by ANGLE, not by elevation NUMBER. A split-cut precip VCP
+			// scans 0.5° as TWO cuts at the SAME angle — a surveillance cut (elevation number 1,
+			// reflectivity) immediately followed by its Doppler companion (number 2, velocity).
+			// Stopping at number >= 2 (as this used to) dropped the velocity cut, so every archive
+			// loop frame was blank in Velocity mode. Instead we anchor the base angle on the first
+			// real radial and keep every radial at that angle (both halves of the split cut), stopping
+			// only at a radial that belongs to a genuinely higher tilt. Clear-air VCPs have one
+			// combined 0.5° cut that itself carries velocity and a higher-angle next tilt, so the same
+			// rule keeps exactly that one cut. The companion is written AFTER the surveillance, so its
+			// higher elevation number leaves the JS `Math.min(elevations)` picking the surveillance for
+			// reflectivity while the Doppler cut supplies velocity.
+			const float tiltTol = 0.20f; // the Doppler companion shares the base angle within jitter
 			var pos = headerSize;
 			var records = 0;
-			var inTilt1 = false; // have we reached the first real 0.5° radial yet?
+			var inTilt1 = false;       // have we reached the first real 0.5° radial yet?
+			var baseAngle = float.NaN; // the lowest tilt's angle, anchored on that first radial
+			var baseElev = 0;          // the highest elevation NUMBER we've decided still belongs to it
 			while (pos + 4 <= raw.Length)
 			{
 				var controlWord = (raw[pos] << 24) | (raw[pos + 1] << 16) | (raw[pos + 2] << 8) | raw[pos + 3];
@@ -1007,20 +1051,38 @@ namespace OfflineMapsTest.Services
 				pos += size;
 
 				var elev = ElevationOf(block, icao);
-				if (elev == 1)
+				var angle = ElevationAngleOf(block, icao);
+
+				if (!inTilt1)
 				{
-					inTilt1 = true;
+					// Leading metadata (Msg 5/13/15/…) the decoder needs, plus any settling radials,
+					// up to the first real reflectivity radial. We anchor on a block that actually
+					// carries a DREF moment (metadata never does), so a false ICAO match in metadata —
+					// whose bytes can read as a plausible elevation/angle — can't anchor us early.
+					if (!float.IsNaN(angle) && elev >= 1 && HasMoment(block, Dref))
+					{
+						inTilt1 = true;
+						baseAngle = angle;
+						baseElev = elev;
+					}
+					output.Write(block, 0, block.Length);
+					records++;
+					continue;
 				}
 
-				// Only treat elevation >= 2 as "past the lowest tilt" once we've actually entered
-				// it. The leading metadata record can contain the ICAO string at an offset whose
-				// byte-22 reads as a bogus elevation; without this guard that aborted the whole
-				// extraction (records == 0 -> null -> the caller cached the raw ~86 MB volume,
-				// which the JS then bzip2-decoded every frame — the KFDX ~7 s/frame bug).
-				if (inTilt1 && elev >= 2)
+				// Only evaluate the tilt boundary at an elevation-NUMBER increase. A stray angle
+				// misread on a block WITHIN the cut (a bad ICAO+24 float read) must not abort the
+				// sweep — doing so truncated reflectivity to ~one block and dropped the Doppler cut,
+				// the intermittent ~120-radial blank-frame bug. A genuinely higher tilt always carries
+				// a higher elevation number, so gate on that first, then confirm by angle.
+				if (elev > baseElev)
 				{
-					completedTilt = true; // crossed into elevation 2 -> tilt 1 fully scanned
-					break;
+					if (!float.IsNaN(angle) && angle > baseAngle + tiltTol)
+					{
+						completedTilt = true; // crossed into a higher tilt -> tilt 1 fully scanned
+						break;
+					}
+					baseElev = elev; // same-angle split-cut Doppler companion -> keep it, advance marker
 				}
 
 				output.Write(block, 0, block.Length);
