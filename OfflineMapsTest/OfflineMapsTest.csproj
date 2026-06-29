@@ -18,6 +18,7 @@
     <None Remove="Assets\Map\map.js" />
     <None Remove="Assets\Map\radar.js" />
     <None Remove="Assets\Map\radar-decode.js" />
+    <None Remove="Assets\Map\radar-ramps.js" />
     <None Remove="Assets\Map\radar-worker.js" />
     <None Remove="Assets\Map\vendor\nexrad-level-2-data.esm.js" />
     <None Remove="Assets\Map\vendor\seek-bzip.esm.js" />
@@ -27,6 +28,16 @@
 
   <ItemGroup>
     <Content Include="Assets\radar-sites.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <!-- Curated DOW (mobile-radar) frames for the DOW Event Viewer (offline-converted via
+         tools/dow_import.py). The folder ships even when empty so the dowevents host has a target. -->
+    <Content Include="Assets\DowEvents\*.dow.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <!-- Ships the README so the DowEvents folder always exists in the (read-only) package, giving the
+         dowevents virtual host a folder to map even before any frames are added. -->
+    <Content Include="Assets\DowEvents\README.md">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
     <Content Include="Assets\SplashScreen.scale-200.png" />
@@ -66,6 +77,9 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
     <Content Update="Assets\Map\radar-decode.js">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Update="Assets\Map\radar-ramps.js">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
     <Content Update="Assets\Map\radar-worker.js">

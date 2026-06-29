@@ -49,5 +49,7 @@
   <Capabilities>
     <rescap:Capability Name="runFullTrust" />
     <systemai:Capability Name="systemAIModels"/>
+    <!-- OS geolocation (LocationService.GetFromOperatingSystemAsync). The IP fallback needs no capability. -->
+    <DeviceCapability Name="location" />
   </Capabilities>
 </Package>

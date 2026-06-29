@@ -361,3 +361,7 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+
+# Curated DOW (mobile-radar) frames — large research-data exports (CC/attribution), generated
+# locally via tools/dow_import.py. Don't commit the data; the folder + its README are kept.
+OfflineMapsTest/Assets/DowEvents/*.dow.json

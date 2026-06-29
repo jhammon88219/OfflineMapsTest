@@ -6,5 +6,5 @@ namespace OfflineMapsTest.Models
 	/// project the decoded Level II gates in the WebView. Mirrors the immutable-record
 	/// style of <see cref="MapRegion"/> / <see cref="MapStyle"/>.
 	/// </summary>
-	public record RadarSite(string Id, string Name, double Latitude, double Longitude, double Zoom);
+	public record RadarSite(string Id, string Name, double Latitude, double Longitude);
 }
