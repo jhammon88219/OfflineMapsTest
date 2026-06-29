@@ -26,9 +26,16 @@ namespace OfflineMapsTest
 		// here because MainWindow owns the WebView2 host mapping for its cache folder.
 		private readonly ISpcOutlookService _spcOutlookService;
 
+		// SPC watch-box data layer (fetch + cache of active watch GeoJSON). Same reason —
+		// MainWindow owns the WebView2 host mapping for its cache folder.
+		private readonly ISpcWatchService _spcWatchService;
+
 		// Level II radar data layer (fetch + cache of .V06 volumes). Kept here because
 		// MainWindow owns the WebView2 host mapping for its cache folder.
 		private readonly ILevel2RadarService _radarService;
+
+		// App settings (offline basemap folder, …). Read when mapping the "mapdata" WebView host.
+		private readonly ISettingsService _settingsService;
 
 		public MainWindow()
 		{
@@ -45,13 +52,30 @@ namespace OfflineMapsTest
 			// GeoJSON cache and never touches WebView2; we map its cache folder to a
 			// virtual host in InitializeWebViewAsync.
 			_spcOutlookService = new SpcOutlookService();
+			_spcWatchService = new SpcWatchService();
 			_radarService = new Level2RadarService();
 			var radarSiteProvider = new RadarSiteProvider();
+			var locationService = new LocationService();
 
-			ViewModel = new MapViewModel(mapService, styleProvider, regionProvider, _spcOutlookService, radarSiteProvider, _radarService);
+			// App settings (packaged-app LocalSettings). Holds the offline basemap folder, read by
+			// InitializeWebViewAsync below to map the "mapdata" host (default = runtime-resolved Desktop).
+			_settingsService = new SettingsService();
+
+			// Start the dedicated radar diagnostics for this run: a per-launch JSONL event stream +
+			// a derived markdown report under a package-local Diagnostics/ folder (never auto-deleted;
+			// see RadarDiagnostics). This is the primary tool for chasing intermittent radar issues.
+			Services.RadarDiagnostics.Init(
+				System.IO.Path.Combine(_radarService.CacheDirectory, "Diagnostics"));
+
+			var dowEventProvider = new DowEventProvider();
+			ViewModel = new MapViewModel(mapService, styleProvider, regionProvider, _spcOutlookService, _spcWatchService, radarSiteProvider, _radarService, locationService, dowEventProvider);
 
 			ExtendsContentIntoTitleBar = true;
 			InitializeComponent();
+
+			// Keep the dock's site list scrolled to the selected site when a map-marker pick drives
+			// the selection (the SelectedItem binding highlights the row but doesn't auto-scroll).
+			ViewModel.PropertyChanged += OnViewModelPropertyChanged;
 
 			// Start maximized.
 			(AppWindow.Presenter as OverlappedPresenter)?.Maximize();
@@ -62,6 +86,13 @@ namespace OfflineMapsTest
 			// existing cache while fresh outlooks download, then keeps refreshing on a timer so a
 			// long-running session doesn't sit on stale outlooks.
 			_ = RefreshOutlooksInBackgroundAsync();
+
+			// SPC watch boxes refresh on their own cadence (and expire over time).
+			_ = RefreshWatchesInBackgroundAsync();
+
+			// Write a final flush + report on close so the run's last events aren't lost between
+			// the ~2 s background flushes.
+			Closed += (_, _) => Services.RadarDiagnostics.FlushAll();
 		}
 
 		// SPC products update a handful of times a day at scheduled issuances; poll periodically so
@@ -97,6 +128,44 @@ namespace OfflineMapsTest
 					System.Diagnostics.Debug.WriteLine($"[SPC] refresh aborted: {ex.Message}");
 				}
 				first = false;
+
+				// Tell the VM when the next periodic refresh is roughly due, so the Outlook tool
+				// window can show a countdown/progress to it (the PeriodicTimer fires on a fixed
+				// cadence; the refresh itself takes seconds, negligible vs the 15-min interval).
+				var cycleStart = DateTimeOffset.Now;
+				DispatcherQueue.TryEnqueue(() =>
+					ViewModel.SetOutlookRefreshSchedule(cycleStart, cycleStart + OutlookRefreshInterval));
+			}
+			while (await timer.WaitForNextTickAsync());
+		}
+
+		// SPC watches change on roughly hourly scales but expire continuously; a few-minute refresh
+		// keeps the active set current (the service re-filters to in-effect watches each cycle).
+		private static readonly TimeSpan WatchRefreshInterval = TimeSpan.FromMinutes(2);
+
+		private async Task RefreshWatchesInBackgroundAsync()
+		{
+			var first = true;
+			using var timer = new PeriodicTimer(WatchRefreshInterval);
+			do
+			{
+				try
+				{
+					var result = await _spcWatchService.RefreshAsync();
+					System.Diagnostics.Debug.WriteLine($"[SPC] watches refresh: {result.Status} active={result.ActiveCount} {result.Message}");
+
+					// Re-point the page at the cache so it reloads — on launch (first-run empty cache)
+					// and whenever a cycle pulled fresh data.
+					if (first || result.Status is SpcWatchFetchStatus.Updated)
+					{
+						DispatcherQueue.TryEnqueue(() => ViewModel.OnWatchesRefreshed());
+					}
+				}
+				catch (Exception ex)
+				{
+					System.Diagnostics.Debug.WriteLine($"[SPC] watches refresh aborted: {ex.Message}");
+				}
+				first = false;
 			}
 			while (await timer.WaitForNextTickAsync());
 		}
@@ -117,7 +186,7 @@ namespace OfflineMapsTest
 			var lng = region?.Longitude ?? -95.5;
 			var lat = region?.Latitude ?? 37.0;
 			return "https://mapassets/map.html" +
-				"?key=main&interactive=true" +
+				"?interactive=true" +
 				$"&style={styleFile}" +
 				$"&lng={lng.ToString(CultureInfo.InvariantCulture)}" +
 				$"&lat={lat.ToString(CultureInfo.InvariantCulture)}" +
@@ -136,10 +205,13 @@ namespace OfflineMapsTest
 				folderPath: Path.Combine(AppContext.BaseDirectory, "Assets", "Map"),
 				accessKind: CoreWebView2HostResourceAccessKind.Allow);
 
-			// Serve the large tile data file from its fixed external location.
+			// Serve the large (~29 GB) basemap PMTiles file from the user-configured folder (default =
+			// runtime-resolved Desktop; never a hardcoded path). The file is far too big to bundle, so
+			// it stays external; the Settings dialog lets the user point at it. Mapping the chosen folder
+			// (not a whole user folder) also narrows what the WebView can read.
 			webView.CoreWebView2.SetVirtualHostNameToFolderMapping(
 				hostName: "mapdata",
-				folderPath: @"C:\Users\jhamm\OneDrive\Desktop",
+				folderPath: _settingsService.MapDataFolder,
 				accessKind: CoreWebView2HostResourceAccessKind.Allow);
 
 			// Serve the cached SPC outlook GeoJSON (written by SpcOutlookService) so the
@@ -150,11 +222,28 @@ namespace OfflineMapsTest
 				folderPath: _spcOutlookService.CacheDirectory,
 				accessKind: CoreWebView2HostResourceAccessKind.Allow);
 
+			// Serve the cached SPC watch GeoJSON (written by SpcWatchService) so the page can load
+			// https://spcwatches/watches.geojson and draw the watch boxes.
+			webView.CoreWebView2.SetVirtualHostNameToFolderMapping(
+				hostName: SpcWatchService.CacheHostName,
+				folderPath: _spcWatchService.CacheDirectory,
+				accessKind: CoreWebView2HostResourceAccessKind.Allow);
+
 			// Serve the cached Level II volumes (written by Level2RadarService) so the page
 			// can load them from https://radarlevel2/<site>.V06 and decode them in JS.
 			webView.CoreWebView2.SetVirtualHostNameToFolderMapping(
 				hostName: Level2RadarService.CacheHostName,
 				folderPath: _radarService.CacheDirectory,
+				accessKind: CoreWebView2HostResourceAccessKind.Allow);
+
+			// Serve the bundled curated DOW (mobile-radar) frames (Assets/DowEvents/*.dow.json) so the
+			// page can fetch https://dowevents/<file>.dow.json and render it. The folder ships with the
+			// app (its README is Content), so it normally exists; guard the create for the rare case it
+			// doesn't (a read-only package dir would throw otherwise).
+			try { Directory.CreateDirectory(DowEventProvider.EventsDirectory); } catch { /* folder ships with the app */ }
+			webView.CoreWebView2.SetVirtualHostNameToFolderMapping(
+				hostName: DowEventProvider.HostName,
+				folderPath: DowEventProvider.EventsDirectory,
 				accessKind: CoreWebView2HostResourceAccessKind.Allow);
 
 			webView.CoreWebView2.WebMessageReceived += OnWebMessageReceived;
@@ -180,15 +269,53 @@ namespace OfflineMapsTest
 				}
 				var type = typeEl.GetString();
 
-				// Diagnostics from radar.js surface in the VS Output window.
+				// Free-form diagnostics line from radar.js (also echoed to the VS Output window).
 				if (type == "radarLog")
 				{
 					if (root.TryGetProperty("msg", out var msgEl))
 					{
 						var msg = msgEl.GetString();
 						System.Diagnostics.Debug.WriteLine($"[radar-js] {msg}");
-						Services.RadarDebugLog.Log($"js  {msg}");
+						if (msg is not null) Services.RadarDiagnostics.JsLog(msg);
 					}
+					return;
+				}
+
+				// Structured per-frame decode metrics from radar.js — recorded with suspect-frame
+				// evaluation + .V06 quarantine in the diagnostics service.
+				if (type == "radarFrame")
+				{
+					Services.RadarDiagnostics.JsFrame(root);
+					return;
+				}
+
+				// Render-health signal from radar.js (blank / error / recovered / context lost).
+				if (type == "radarRender")
+				{
+					Services.RadarDiagnostics.JsRender(root);
+					return;
+				}
+
+				// The active product's color ramp (pushed from radar-ramps.js) — feeds the legend.
+				if (type == "radarRamp")
+				{
+					if (root.TryGetProperty("ramp", out var rampEl))
+					{
+						var ramp = JsonSerializer.Deserialize<Models.RadarRampInfo>(
+							rampEl.GetRawText(),
+							new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+						ViewModel.SetColorScale(ramp);
+					}
+					return;
+				}
+
+				// Inspect-mode value under the cursor (pushed from radar.js as the pointer moves) —
+				// drives the live marker on the color-scale bar. has=false clears it.
+				if (type == "radarInspect")
+				{
+					var has = root.TryGetProperty("has", out var hasEl) && hasEl.GetBoolean();
+					double? val = has && root.TryGetProperty("value", out var valEl) ? valEl.GetDouble() : null;
+					ViewModel.SetInspectValue(val);
 					return;
 				}
 
@@ -198,6 +325,28 @@ namespace OfflineMapsTest
 					if (root.TryGetProperty("id", out var siteEl))
 					{
 						ViewModel.OnRadarSiteClicked(siteEl.GetString());
+					}
+					return;
+				}
+
+				// A map marker (e.g. the user-location marker) was clicked — select it for editing.
+				if (type == "markerClick")
+				{
+					if (root.TryGetProperty("id", out var mIdEl))
+					{
+						ViewModel.OnMarkerClicked(mIdEl.GetString());
+					}
+					return;
+				}
+
+				// A draggable marker was moved — record the refined position.
+				if (type == "markerMoved")
+				{
+					if (root.TryGetProperty("id", out var mvIdEl) &&
+						root.TryGetProperty("lng", out var lngEl) &&
+						root.TryGetProperty("lat", out var latEl))
+					{
+						ViewModel.OnMarkerMoved(mvIdEl.GetString(), lngEl.GetDouble(), latEl.GetDouble());
 					}
 					return;
 				}
@@ -232,9 +381,35 @@ namespace OfflineMapsTest
 			ViewModel.ToggleRadarPlay();
 		}
 
+		private void OnStopLoopClick(object sender, RoutedEventArgs e)
+		{
+			ViewModel.StopRadarLoop();
+		}
+
+		private void OnLoadPastEventClick(object sender, RoutedEventArgs e)
+		{
+			_ = ViewModel.LoadSelectedPastEventAsync();
+		}
+
+		private void OnLoadDowEventClick(object sender, RoutedEventArgs e)
+		{
+			_ = ViewModel.LoadDowEventAsync();
+		}
+
+		private void OnClearDowEventClick(object sender, RoutedEventArgs e)
+		{
+			_ = ViewModel.ClearDowEventAsync();
+		}
+
 		private void OnToggleRadarSitesClick(object sender, RoutedEventArgs e)
 		{
 			ViewModel.ToggleRadarSitesVisible();
+		}
+
+		// Radar Loop tool window: hard-reset the current loop (dump + reload from scratch).
+		private void OnResetLoopClick(object sender, RoutedEventArgs e)
+		{
+			ViewModel.ResetRadarLoop();
 		}
 
 		// Left tool-window dock: collapse + reveal both just flip the dock state.
@@ -243,13 +418,67 @@ namespace OfflineMapsTest
 			ViewModel.ToggleDock();
 		}
 
-		// Clicking a row in the dock's "Radar Sites" list selects that site (same path as
-		// clicking its on-map marker).
-		private void OnRadarSiteListItemClick(object sender, ItemClickEventArgs e)
+		// Tools header gear: open the Settings dialog. Changing the basemap folder is persisted and
+		// applied on the next launch (the map host is mapped once at startup; re-mapping live would
+		// need a page reload that re-runs the one-time startup loops, so a restart is the clean path).
+		private async void OnOpenSettingsClick(object sender, RoutedEventArgs e)
 		{
-			if (e.ClickedItem is RadarSite site)
+			var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+			var dialog = new SettingsDialog(_settingsService, hwnd) { XamlRoot = Content.XamlRoot };
+			var before = _settingsService.MapDataFolder;
+
+			var result = await dialog.ShowAsync();
+			if (result != ContentDialogResult.Primary)
 			{
-				ViewModel.OnRadarSiteClicked(site.Id);
+				return;
+			}
+
+			var chosen = dialog.SelectedFolder;
+			if (string.IsNullOrWhiteSpace(chosen) || string.Equals(chosen, before, StringComparison.OrdinalIgnoreCase))
+			{
+				return;
+			}
+
+			_settingsService.MapDataFolder = chosen;
+			await new ContentDialog
+			{
+				Title = "Restart to apply",
+				Content = "The map data folder was updated. Restart the app to load the basemap from the new location.",
+				CloseButtonText = "OK",
+				XamlRoot = Content.XamlRoot,
+			}.ShowAsync();
+		}
+
+		// Radar Loop tool window: toggle inspect mode (read the value under the cursor). IsChecked is
+		// bound one-way (bool? target, bool source), so the click drives the VM from the button state.
+		private void OnToggleInspectClick(object sender, RoutedEventArgs e)
+		{
+			if (sender is Microsoft.UI.Xaml.Controls.Primitives.ToggleButton tb)
+			{
+				ViewModel.IsInspecting = tb.IsChecked == true;
+			}
+		}
+
+		// Map tool window: resolve + show the user's location (OS, then IP fallback).
+		private async void OnMyLocationClick(object sender, RoutedEventArgs e)
+		{
+			await ViewModel.ShowMyLocationAsync();
+		}
+
+		// Selected Marker tool window: remove the selected marker from the map.
+		private void OnRemoveMarkerClick(object sender, RoutedEventArgs e)
+		{
+			ViewModel.RemoveSelectedMarker();
+		}
+
+		// The dock's "Radar Sites" list is two-way bound to ViewModel.SelectedSiteRow, so a row
+		// click selects the site and a map-marker pick highlights the row. ScrollIntoView isn't
+		// automatic on a programmatic SelectedItem change, so do it here when the selection moves.
+		private void OnViewModelPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+		{
+			if (e.PropertyName == nameof(MapViewModel.SelectedSiteRow) && ViewModel.SelectedSiteRow is { } row)
+			{
+				RadarSitesListView?.ScrollIntoView(row);
 			}
 		}
 
@@ -301,6 +530,10 @@ namespace OfflineMapsTest
 		public Visibility VisibleWhen(bool value) =>
 			value ? Visibility.Visible : Visibility.Collapsed;
 
+		// x:Bind function: logical AND of two bools (re-evaluates when either changes). Used to gate
+		// "Reset loop" on both having a loop AND being in live mode.
+		public bool AllTrue(bool a, bool b) => a && b;
+
 		// x:Bind function: the radar card's status-dot color for a freshness level (same reason
 		// as VisibleWhen — no converter lookup with a Window root).
 		public Microsoft.UI.Xaml.Media.Brush RadarDotBrush(RadarFreshness status) =>
@@ -311,6 +544,86 @@ namespace OfflineMapsTest
 				RadarFreshness.Stale => Windows.UI.Color.FromArgb(0xFF, 0xF8, 0x5E, 0x5E),  // red
 				_ => Windows.UI.Color.FromArgb(0xFF, 0x6E, 0x7A, 0x86)                       // gray
 			});
+
+		// x:Bind function: the Segoe Fluent glyph indicating which method produced the location —
+		// a map pin for the (precise) OS fix, a globe for the (approximate) IP fallback, an info
+		// glyph otherwise (locating / unavailable).
+		public string LocationGlyph(LocationSource source) => source switch
+		{
+			LocationSource.Manual => "",     // Edit (manually adjusted)
+			LocationSource.OperatingSystem => "", // MapPin
+			LocationSource.IpAddress => "",       // Globe
+			_ => ""                                // Info
+		};
+
+		// x:Bind function: color for the location source affordance (green = precise OS fix,
+		// amber = approximate IP, gray = none). Same no-converter pattern as RadarDotBrush.
+		public Microsoft.UI.Xaml.Media.Brush LocationBrush(LocationSource source) =>
+			new Microsoft.UI.Xaml.Media.SolidColorBrush(source switch
+			{
+				LocationSource.Manual => Windows.UI.Color.FromArgb(0xFF, 0x2F, 0x8F, 0xFF),          // blue (manually adjusted)
+				LocationSource.OperatingSystem => Windows.UI.Color.FromArgb(0xFF, 0x3F, 0xB9, 0x50), // green
+				LocationSource.IpAddress => Windows.UI.Color.FromArgb(0xFF, 0xE3, 0xB3, 0x41),       // amber
+				_ => Windows.UI.Color.FromArgb(0xFF, 0x6E, 0x7A, 0x86)                                // gray
+			});
+
+		// x:Bind function: builds the color-scale legend bar as a LinearGradientBrush straight from the
+		// ramp's stops (the same data that colors the gates — honest, not a hand-drawn copy). Smooth
+		// gradient for interpolated ramps (velocity/CC); hard NWS bands for discrete ramps (reflectivity)
+		// via duplicated stops at each band boundary.
+		public Microsoft.UI.Xaml.Media.Brush RampBrush(Models.RadarRampInfo? ramp)
+		{
+			var brush = new Microsoft.UI.Xaml.Media.LinearGradientBrush
+			{
+				StartPoint = new Windows.Foundation.Point(0, 0.5),
+				EndPoint = new Windows.Foundation.Point(1, 0.5),
+			};
+			if (ramp?.Stops is not { Count: > 0 } stops)
+			{
+				return brush;
+			}
+
+			double min = ramp.Min, max = ramp.Max, span = max - min;
+			if (span <= 0) span = 1;
+			double Off(double v) => Math.Clamp((v - min) / span, 0, 1);
+
+			static Windows.UI.Color ColorOf(Models.RadarRampStop s)
+			{
+				var c = s.Color;
+				byte r = (byte)(c.Length > 0 ? c[0] : 0), g = (byte)(c.Length > 1 ? c[1] : 0), b = (byte)(c.Length > 2 ? c[2] : 0);
+				return Windows.UI.Color.FromArgb(0xFF, r, g, b);
+			}
+
+			if (ramp.Interpolate)
+			{
+				foreach (var s in stops)
+				{
+					brush.GradientStops.Add(new Microsoft.UI.Xaml.Media.GradientStop { Offset = Off(s.V), Color = ColorOf(s) });
+				}
+			}
+			else
+			{
+				// Discrete: a value in [v_i, v_{i+1}) takes color_i, so hold each band's color flat and
+				// jump at the boundary (two stops at the same offset = a hard edge).
+				brush.GradientStops.Add(new Microsoft.UI.Xaml.Media.GradientStop { Offset = 0, Color = ColorOf(stops[0]) });
+				for (int i = 1; i < stops.Count; i++)
+				{
+					double off = Off(stops[i].V);
+					brush.GradientStops.Add(new Microsoft.UI.Xaml.Media.GradientStop { Offset = off, Color = ColorOf(stops[i - 1]) });
+					brush.GradientStops.Add(new Microsoft.UI.Xaml.Media.GradientStop { Offset = off, Color = ColorOf(stops[i]) });
+				}
+			}
+			return brush;
+		}
+
+		// x:Bind functions positioning the inspect marker over the color-scale bar via a 3-column grid
+		// (left-star | marker | right-star): the star weights are the value's fraction along the ramp,
+		// so the marker lands at the right spot without needing the bar's pixel width.
+		public Microsoft.UI.Xaml.GridLength InspectLeftStar(double fraction) =>
+			new Microsoft.UI.Xaml.GridLength(Math.Clamp(fraction, 0, 1), Microsoft.UI.Xaml.GridUnitType.Star);
+
+		public Microsoft.UI.Xaml.GridLength InspectRightStar(double fraction) =>
+			new Microsoft.UI.Xaml.GridLength(1 - Math.Clamp(fraction, 0, 1), Microsoft.UI.Xaml.GridUnitType.Star);
 
 		/// <summary>
 		/// IMapView seam: the ONLY place that touches WebView2 / ExecuteScriptAsync.

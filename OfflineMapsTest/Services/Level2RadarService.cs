@@ -64,6 +64,32 @@ namespace OfflineMapsTest.Services
 			return recent;
 		}
 
+		public async Task<IReadOnlyList<string>> GetKeysForWindowAsync(RadarSite site, DateTimeOffset startUtc, DateTimeOffset endUtc, CancellationToken cancellationToken = default)
+		{
+			if (endUtc < startUtc)
+			{
+				(startUtc, endUtc) = (endUtc, startUtc);
+			}
+
+			// List every UTC day the window touches (the bucket paths are <y>/<m>/<d>/<SITE>/), then
+			// keep only the volumes whose scan time lands inside the window. Unlike the live path we do
+			// NOT prune the cache here — past frames the user loaded shouldn't be deleted by a later
+			// live loop's prune (and vice-versa); the cache simply accumulates.
+			var all = new List<string>();
+			for (var day = startUtc.UtcDateTime.Date; day <= endUtc.UtcDateTime.Date; day = day.AddDays(1))
+			{
+				cancellationToken.ThrowIfCancellationRequested();
+				all.AddRange(await KeysForDayAsync(site.Id, new DateTimeOffset(day, TimeSpan.Zero), cancellationToken));
+			}
+
+			return all
+				.Select(k => (key: k, time: ParseVolumeTime(k)))
+				.Where(x => x.time is { } t && t >= startUtc && t <= endUtc)
+				.OrderBy(x => x.time)
+				.Select(x => x.key)
+				.ToList();
+		}
+
 		public async Task<RadarVolume?> EnsureCachedAsync(RadarSite site, string key, CancellationToken cancellationToken = default)
 		{
 			var time = ParseVolumeTime(key) ?? DateTimeOffset.UtcNow;
@@ -85,10 +111,19 @@ namespace OfflineMapsTest.Services
 					raw = await response.Content.ReadAsByteArrayAsync(cancellationToken);
 				}
 
+				// Archived volumes (older dates) are gzip-wrapped (key ends ".gz"); the underlying
+				// bytes are the same AR2V format the extractor expects, so gunzip first. Recent volumes
+				// are stored raw, so this only runs for the historical Past Event Viewer fetches.
+				var isGz = key.EndsWith(".gz", StringComparison.Ordinal);
+
 				// Extract only the lowest tilt on a worker thread; fall back to raw on failure.
 				var toWrite = await Task.Run(() =>
 				{
-					try { return TryExtractLowestTilt(raw, site.Id) ?? raw; }
+					try
+					{
+						var data = isGz ? Gunzip(raw) : raw;
+						return TryExtractLowestTilt(data, site.Id) ?? data;
+					}
 					catch (Exception ex)
 					{
 						System.Diagnostics.Debug.WriteLine($"[radar] {site.Id} extract failed, caching raw: {ex.Message}");
@@ -112,8 +147,12 @@ namespace OfflineMapsTest.Services
 			}
 		}
 
-		// Safety cap on chunks decoded per live build (a full volume is ~67 chunks).
-		private const int LiveChunkCap = 90;
+		// Safety cap on chunks decoded per live build. A plain volume is ~67 chunks, but a SAILS
+		// precip VCP (extra 0.5° re-scans mid-volume) runs well past 90 — capping at 90 froze the
+		// in-progress volume before its latest sweep's Doppler completed (the stuck partial-velocity
+		// wedge). 160 covers a SAILS-heavy VCP 12/212/215 volume; decode stays cheap (incremental —
+		// only NEW chunks are pulled/decompressed each poll).
+		private const int LiveChunkCap = 160;
 
 		// Per-volume decoded-chunk cache so repeated polls of the same in-progress volume only
 		// download + decompress the NEW chunks (bounds bandwidth to ~one volume's worth). Keyed
@@ -135,12 +174,14 @@ namespace OfflineMapsTest.Services
 				var newest = await FindNewestChunkVolumeAsync(site.Id, cancellationToken);
 				if (newest is null)
 				{
-					RadarDebugLog.Log($"svc live {site.Id}: no chunk volumes found");
+					RadarDiagnostics.Log("svc", "live", ("site", site.Id), ("msg", "no chunk volumes found"));
 					return null;
 				}
 
 				var (vol, start) = newest.Value;
-				RadarDebugLog.Log($"svc live {site.Id}: newest vol={vol} start={start:HH:mm:ss}Z age={(DateTimeOffset.UtcNow - start).TotalMinutes:0.0}m");
+				RadarDiagnostics.Log("svc", "live", ("site", site.Id), ("vol", vol),
+					("startZ", start.ToUniversalTime().ToString("HH:mm:ss")),
+					("ageMin", Math.Round((DateTimeOffset.UtcNow - start).TotalMinutes, 1)));
 
 				// Build from the newest volume, accumulating its chunks across polls (it's the
 				// growing in-progress one).
@@ -168,7 +209,8 @@ namespace OfflineMapsTest.Services
 						{
 							return _fallbackVolume;
 						}
-						RadarDebugLog.Log($"svc live {site.Id}: newest vol={vol} not ready -> fall back to finished vol={prevVol}");
+						RadarDiagnostics.Log("svc", "live", ("site", site.Id), ("vol", vol),
+							("msg", $"newest not ready -> fall back to finished vol={prevVol}"));
 						var fb = await BuildLiveFrameAsync(site, prevVol, ps, useCache: false, cancellationToken);
 						if (fb is not null)
 						{
@@ -187,7 +229,7 @@ namespace OfflineMapsTest.Services
 			catch (Exception ex)
 			{
 				System.Diagnostics.Debug.WriteLine($"[radar] {site.Id} live frame failed: {ex.Message}");
-				RadarDebugLog.Log($"svc live {site.Id}: ERROR {ex.Message}");
+				RadarDiagnostics.Log("svc", "live", ("site", site.Id), ("error", ex.Message));
 				return null;
 			}
 		}
@@ -205,7 +247,8 @@ namespace OfflineMapsTest.Services
 				.ToList();
 			if (chunks.Count == 0 || !chunks.Any(c => c.kind == 'S'))
 			{
-				RadarDebugLog.Log($"svc live {site.Id}: vol={vol} no S chunk ({chunks.Count} chunks) -> can't decode");
+				RadarDiagnostics.Log("svc", "live", ("site", site.Id), ("vol", vol),
+					("msg", $"no S chunk ({chunks.Count} chunks) -> can't decode"));
 				return null; // no header chunk (older volume, partially expired) -> can't decode
 			}
 			chunks.Sort((a, b) => a.seq.CompareTo(b.seq));
@@ -284,16 +327,18 @@ namespace OfflineMapsTest.Services
 
 			if (header is null)
 			{
-				RadarDebugLog.Log($"svc live {site.Id}: vol={vol} header chunk missing -> can't decode");
+				RadarDiagnostics.Log("svc", "live", ("site", site.Id), ("vol", vol),
+					("msg", "header chunk missing -> can't decode"));
 				return null;
 			}
 
 			var ordered = blocks.Values.ToList();
 			var hdr = header;
 			var sel = await Task.Run(() => SelectLatestSweep(hdr, ordered, icao), ct);
-			if (!sel.complete || sel.data is null)
+			if (!sel.complete || sel.data is null || !sel.velComplete)
 			{
-				RadarDebugLog.Log($"svc live {site.Id}: vol={vol} no complete 0.5° sweep yet ({blocks.Count} chunks, +{added})");
+				RadarDiagnostics.Log("svc", "live", ("site", site.Id), ("vol", vol),
+					("msg", $"no complete sweep yet (refl={sel.complete} vel={sel.velComplete}, {blocks.Count} chunks, +{added}) -> fall back"));
 				return null;
 			}
 
@@ -314,8 +359,11 @@ namespace OfflineMapsTest.Services
 			PruneLiveCache(site.Id, cacheFile);
 
 			var mode = DescribeMode(sel.vcp, sel.sweeps);
-			RadarDebugLog.Log($"svc live {site.Id}: vol={vol} BUILT latest 0.5° sweep @ {ts:HH:mm:ss}Z " +
-				$"(age {(DateTimeOffset.UtcNow - ts).TotalMinutes:0.0}m, {blocks.Count} chunks, {mode})");
+			RadarDiagnostics.Log("svc", "live", ("site", site.Id), ("vol", vol),
+				("builtZ", ts.ToUniversalTime().ToString("HH:mm:ss")),
+				("ageMin", Math.Round((DateTimeOffset.UtcNow - ts).TotalMinutes, 1)),
+				("mode", mode),
+				("msg", $"BUILT latest 0.5° sweep ({blocks.Count} chunks)"));
 			return new RadarVolume(LiveUrlFor(site.Id, ts), site, ts, mode);
 		}
 
@@ -356,13 +404,13 @@ namespace OfflineMapsTest.Services
 		// latest low-tilt reflectivity cut. Returns the minimal single-tilt buffer (24-byte header +
 		// leading metadata records + that cut's radials), its actual radial time, the count of such
 		// low-tilt sweeps (SAILS indicator), and the VCP number.
-		private static (byte[]? data, bool complete, DateTimeOffset? dataTime, int sweeps, int vcp)
+		private static (byte[]? data, bool complete, bool velComplete, DateTimeOffset? dataTime, int sweeps, int vcp)
 			SelectLatestSweep(byte[] header, List<(byte[] block, int elev)> blocks, byte[] icao)
 		{
 			var firstRadial = blocks.FindIndex(b => b.elev >= 1);
 			if (firstRadial < 0)
 			{
-				return (null, false, null, 0, 0);
+				return (null, false, false, null, 0, 0);
 			}
 
 			// Authoritative VCP from the leading metadata record's Message 5. Fall back to the
@@ -411,7 +459,7 @@ namespace OfflineMapsTest.Services
 			var refCuts = cuts.Where(c => c.hasRef && !float.IsNaN(c.angle)).ToList();
 			if (refCuts.Count == 0)
 			{
-				return (null, false, null, 0, vcp);
+				return (null, false, false, null, 0, vcp);
 			}
 			var refAngle = refCuts.Min(c => c.angle);
 
@@ -422,12 +470,21 @@ namespace OfflineMapsTest.Services
 			var surveillance = cuts.Where(c => LowTilt(c) && !c.hasVel).ToList();
 			var pool = surveillance.Count > 0 ? surveillance : cuts.Where(LowTilt).ToList();
 
+			// Designed 0.5° base-scan count from the VCP's elevation table (Message 5) — the PLANNED
+			// SAILS count, which the observed completed-cut count (pool.Count) under-reports mid-volume
+			// because the re-scans haven't run yet when we poll a still-scanning live volume. Validated
+			// against refAngle (its lowest tilt must match the actually-observed one) so a bad parse
+			// can't override with a plausible-but-wrong number. Prefer it when sane; clamp to a
+			// plausible range (SAILS tops out at ×3 = 4 base scans); else fall back to observed.
+			var designedSweeps = ReadSailsSweepsFromMetadata(blocks, refAngle);
+			var sweeps = designedSweeps is >= 1 and <= 6 ? designedSweeps : pool.Count;
+
 			// Complete = terminated by a later cut (the antenna moved on); the trailing in-progress
 			// cut of a live volume is excluded, so we never serve a half-scanned sweep.
 			var ready = pool.Where(c => c.end < blocks.Count).ToList();
 			if (ready.Count == 0)
 			{
-				return (null, false, null, pool.Count, vcp);
+				return (null, false, false, null, sweeps, vcp);
 			}
 
 			// Pick the cut to render and emit its PAIRED Doppler (velocity) cut so the decoded volume
@@ -438,43 +495,53 @@ namespace OfflineMapsTest.Services
 			// still picks it for reflectivity and the higher-numbered Doppler supplies velocity.
 			// Clear-air VCPs have one combined cut (it carries velocity itself), so no companion.
 			//
-			// The companion may still be mid-scan on the freshest live volume — we include it anyway
-			// (a partial velocity sweep is fine), so the newest frame the user is watching carries
-			// velocity. We only step back to an earlier surveillance if the freshest one has NO
-			// companion cut at all (a rare surveillance-only re-scan); keeping a consistent adjacent
-			// pair preserves the JS `Math.min(elevations)` reflectivity pick. If no surveillance has a
-			// companion, we fall back to the freshest surveillance, reflectivity-only.
-			var selected = ready[^1]; // latest = freshest base scan (the SAILS re-scan when present)
+			// Pick the surveillance cut (reflectivity) to serve and its paired Doppler cut (velocity).
+			// We prefer the LATEST surveillance whose Doppler companion is a COMPLETE, full-circle
+			// sweep. Chasing the freshest SAILS re-scan instead serves whatever fraction of its Doppler
+			// has scanned so far, and because the chunk cap freezes the in-progress volume and a
+			// same-timestamp refresh is skipped, that partial wedge (e.g. a ~90° quarter circle) never
+			// fills in — the broken frame in the log/screenshot (`vel 240rad span120`). Stepping back
+			// at most one sub-scan (~1-3 min) to a complete pair keeps FULL velocity AND full
+			// reflectivity. Only if NO surveillance yet has a complete companion do we fall back to the
+			// freshest partial one, so the newest frame still shows velocity rather than going blank.
+			// The companion is the adjacent same-angle velocity cut, written AFTER the surveillance so
+			// its higher elevation number leaves the JS reflectivity pick (Math.min) on the surveillance.
+			var selected = ready[^1];
 			(int start, int end)? velCut = null;
 
-			// The Doppler companion immediately after a surveillance cut, if any. The companion is
-			// identified by VELOCITY at the SAME angle — NOT by reflectivity (a short-PRT Doppler
-			// cut's range-folded reflectivity is inconsistent and can fail the HasMoment gate-count
-			// check), and NOT by being terminated/complete: on the freshest live volume the 0.5°
-			// Doppler is usually the TRAILING in-progress cut (the next tilt hasn't started), so
-			// requiring `next.end < blocks.Count` dropped velocity from exactly the newest frame —
-			// the live-frame "velocity disappears and never returns" bug. A partial Doppler sweep
-			// renders the azimuths scanned so far and fills in as the volume grows; the angle+velocity
-			// test still rejects the next-tilt cut.
-			(int start, int end)? DopplerCompanion(int surveillanceStart)
+			// The Doppler companion immediately after a surveillance cut, if any — identified by
+			// VELOCITY at the SAME angle (NOT reflectivity: a short-PRT Doppler's range-folded
+			// reflectivity can fail the HasMoment gate-count check). `requireComplete` additionally
+			// demands a terminated, full sweep (a later cut follows it).
+			(int start, int end)? DopplerCompanion(int surveillanceStart, bool requireComplete)
 			{
 				var si = cuts.FindIndex(c => c.start == surveillanceStart);
 				if (si < 0 || si + 1 >= cuts.Count) return null;
 				var next = cuts[si + 1];
 				var sameAngle = !float.IsNaN(next.angle) && Math.Abs(next.angle - refAngle) <= tiltTol;
-				return sameAngle && next.hasVel
-					? (next.start, next.end)
-					: ((int start, int end)?)null;
+				if (!(sameAngle && next.hasVel) || (requireComplete && next.end >= blocks.Count))
+				{
+					return null; // not a same-angle velocity cut, or (when required) still mid-scan
+				}
+				return (next.start, next.end);
 			}
 
 			if (surveillance.Count > 0)
 			{
-				for (var s = ready.Count - 1; s >= 0; s--)
+				foreach (var requireComplete in new[] { true, false })
 				{
-					if (DopplerCompanion(ready[s].start) is { } comp)
+					for (var s = ready.Count - 1; s >= 0; s--)
 					{
-						selected = ready[s];
-						velCut = comp;
+						if (DopplerCompanion(ready[s].start, requireComplete) is { } comp)
+						{
+							selected = ready[s];
+							velCut = comp;
+							break;
+						}
+					}
+
+					if (velCut is not null)
+					{
 						break;
 					}
 				}
@@ -500,7 +567,23 @@ namespace OfflineMapsTest.Services
 				}
 			}
 
-			return (output.ToArray(), true, dataTime, pool.Count, vcp);
+			// Velocity is "complete" when its full sweep is present: a split-cut's paired Doppler is a
+			// terminated (not still-scanning) cut, OR — for clear-air — the selected combined cut itself
+			// carries velocity. A partial Doppler (a still-scanning wedge, e.g. 120 of 720 radials) is
+			// NOT complete; the live builder uses this to fall back to the previous (finished) volume
+			// rather than serve a mostly-empty velocity frame.
+			var velComplete = surveillance.Count == 0
+				? selected.hasVel
+				: velCut is { } vchk && vchk.end < blocks.Count;
+			RadarDiagnostics.Log("svc", "sweep",
+				("icao", System.Text.Encoding.ASCII.GetString(icao)), ("vcp", vcp),
+				("velComplete", velComplete),
+				("msg", $"sweeps={sweeps} (obs={pool.Count} designed={designedSweeps}) refCuts={refCuts.Count} surv={surveillance.Count} @ {refAngle:0.00}° " +
+					$"sel=[{selected.start}..{selected.end}]({selected.end - selected.start}blk,{selected.angle:0.00}°) " +
+					$"vel={(velCut is { } vlog ? $"[{vlog.start}..{vlog.end}]({vlog.end - vlog.start}blk,{(velComplete ? "complete" : "PARTIAL")})" : "NONE")} " +
+					$"blocks={blocks.Count} t={(dataTime is { } d3 ? d3.ToString("HH:mm:ss") : "?")}"));
+
+			return (output.ToArray(), true, velComplete, dataTime, sweeps, vcp);
 		}
 
 		// Level II message framing within a decompressed record (per the format ICD, matching
@@ -546,6 +629,82 @@ namespace OfflineMapsTest.Services
 					{
 						return vcp;
 					}
+				}
+			}
+			return 0;
+		}
+
+		// Number of DESIGNED 0.5° base scans (the SAILS count) from the VCP's elevation table in
+		// Message 5, which lists every planned cut up front — so it reports SAILS×N even when polling
+		// a still-scanning volume whose re-scans haven't run yet (where counting completed radial cuts
+		// reads ×1). Same metadata walk as ReadVcpFromMetadata. Message 5 body (after the 12-byte CTM
+		// + 16-byte message headers): pattern_number at +4, num_elevations (int16) at +6, then a
+		// 22-byte VCP header; each elevation cut is a fixed 46-byte block starting at +22, whose
+		// elevation_angle is the leading int16 (coded as value/8*0.043945°) and whose waveform_type is
+		// the byte at cut+3 (1 = CS surveillance). A split-cut precip VCP lists the 0.5° tilt as paired
+		// CS+CD cuts at the same angle; counting the SURVEILLANCE (waveform 1) cuts at the lowest angle
+		// matches the "surveillance sweeps" we render. Clear-air VCPs list one cut per elevation (no CS
+		// pairing), so fall back to counting all lowest-angle cuts there. Returns 0 if not parseable,
+		// or if the table's lowest angle doesn't match <paramref name="observedRefAngle"/> (the actual
+		// observed 0.5° tilt) — that mismatch means the byte offsets didn't line up, so the caller
+		// keeps the trustworthy observed count rather than a plausible-but-wrong override. Field
+		// offsets/encoding verified against the vendored nexrad-level-2-data Message 5 parser.
+		private static int ReadSailsSweepsFromMetadata(List<(byte[] block, int elev)> blocks, float observedRefAngle)
+		{
+			foreach (var (block, _) in blocks)
+			{
+				for (var pos = 0; pos + CtmHeaderSize + MessageHeaderSize + 8 <= block.Length; pos += RadarDataSize)
+				{
+					var msgType = block[pos + CtmHeaderSize + 3];
+					if (msgType == 31)
+					{
+						return 0; // reached the radial data; Message 5 is behind us
+					}
+					if (msgType is not (5 or 7))
+					{
+						continue;
+					}
+
+					var body = pos + CtmHeaderSize + MessageHeaderSize;
+					var vcp = (block[body + 4] << 8) | block[body + 5];
+					if (!IsKnownVcp(vcp))
+					{
+						continue;
+					}
+
+					var numElev = (short)((block[body + 6] << 8) | block[body + 7]);
+					if (numElev is <= 0 or > 40)
+					{
+						return 0;
+					}
+
+					const int cutsStart = 22, stride = 46;
+					var angles = new List<(double angle, int waveform)>(numElev);
+					for (var k = 0; k < numElev; k++)
+					{
+						var off = body + cutsStart + k * stride;
+						if (off + 4 > block.Length)
+						{
+							break;
+						}
+						var raw = (short)((block[off] << 8) | block[off + 1]);
+						angles.Add((raw / 8.0 * 0.043945, block[off + 3]));
+					}
+					if (angles.Count == 0)
+					{
+						return 0;
+					}
+
+					const double tol = 0.25;
+					var minAngle = angles.Min(a => a.angle);
+					// Reality check: the designed lowest tilt must match the observed one, or the parse
+					// is misaligned — bail so the caller keeps the observed count.
+					if (!float.IsNaN(observedRefAngle) && Math.Abs(minAngle - observedRefAngle) > 0.3)
+					{
+						return 0;
+					}
+					var cs = angles.Count(a => Math.Abs(a.angle - minAngle) < tol && a.waveform == 1);
+					return cs >= 1 ? cs : angles.Count(a => Math.Abs(a.angle - minAngle) < tol);
 				}
 			}
 			return 0;
@@ -912,8 +1071,7 @@ namespace OfflineMapsTest.Services
 				foreach (var keyEl in doc.Descendants(S3 + "Key"))
 				{
 					var k = keyEl.Value;
-					// Volume files end in _V06; skip the small _MDM metadata sidecars.
-					if (k.EndsWith("_V06", StringComparison.Ordinal))
+					if (IsVolumeKey(k))
 					{
 						keys.Add(k);
 					}
@@ -1023,8 +1181,10 @@ namespace OfflineMapsTest.Services
 			var pos = headerSize;
 			var records = 0;
 			var inTilt1 = false;       // have we reached the first real 0.5° radial yet?
-			var baseAngle = float.NaN; // the lowest tilt's angle, anchored on that first radial
-			var baseElev = 0;          // the highest elevation NUMBER we've decided still belongs to it
+			var baseAngle = float.NaN; // settled angle of the base tilt (the MAX over its radials)
+			var baseTiltNum = 0;       // the base tilt's elevation NUMBER (its split-cut pair shares it)
+			var baseElev = 0;          // the highest elevation NUMBER accepted as still the base tilt
+			var keptDoppler = false;   // did we keep a higher-numbered same-angle (Doppler) cut?
 			while (pos + 4 <= raw.Length)
 			{
 				var controlWord = (raw[pos] << 24) | (raw[pos + 1] << 16) | (raw[pos + 2] << 8) | raw[pos + 3];
@@ -1063,6 +1223,7 @@ namespace OfflineMapsTest.Services
 					{
 						inTilt1 = true;
 						baseAngle = angle;
+						baseTiltNum = elev;
 						baseElev = elev;
 					}
 					output.Write(block, 0, block.Length);
@@ -1070,11 +1231,22 @@ namespace OfflineMapsTest.Services
 					continue;
 				}
 
+				// Track the base tilt's SETTLED angle as the max over its own radials. The first
+				// radial of a cut is a settling radial that can read well below the true angle (a real
+				// 0.5° base read as 0.27°); anchoring on it alone made the threshold too tight and
+				// dropped the Doppler cut — the intermittent "vel none" archive frames in the log.
+				if (elev == baseTiltNum && !float.IsNaN(angle) && angle > baseAngle)
+				{
+					baseAngle = angle;
+				}
+
 				// Only evaluate the tilt boundary at an elevation-NUMBER increase. A stray angle
 				// misread on a block WITHIN the cut (a bad ICAO+24 float read) must not abort the
 				// sweep — doing so truncated reflectivity to ~one block and dropped the Doppler cut,
 				// the intermittent ~120-radial blank-frame bug. A genuinely higher tilt always carries
-				// a higher elevation number, so gate on that first, then confirm by angle.
+				// a higher elevation number, so gate on that first, then confirm by angle. Over-keeping
+				// (a higher tilt slipping through) is harmless — the JS picks reflectivity from the min
+				// elevation and velocity from the first velocity cut — but dropping the Doppler is not.
 				if (elev > baseElev)
 				{
 					if (!float.IsNaN(angle) && angle > baseAngle + tiltTol)
@@ -1083,11 +1255,18 @@ namespace OfflineMapsTest.Services
 						break;
 					}
 					baseElev = elev; // same-angle split-cut Doppler companion -> keep it, advance marker
+					keptDoppler = true;
 				}
 
 				output.Write(block, 0, block.Length);
 				records++;
 			}
+
+			RadarDiagnostics.Log("svc", "extract", ("site", siteId),
+				("records", records), ("baseElev", baseElev),
+				("keptDoppler", keptDoppler), ("completedTilt", completedTilt),
+				("bytes", records > 0 ? output.Length : 0),
+				("msg", $"baseAngle={(float.IsNaN(baseAngle) ? "?" : baseAngle.ToString("0.00"))}°"));
 
 			return records > 0 ? output.ToArray() : null;
 		}
@@ -1155,6 +1334,64 @@ namespace OfflineMapsTest.Services
 				}
 			}
 			return -1;
+		}
+
+		// True for a Level II VOLUME file. Two on-disk eras both qualify:
+		//   • Modern super-res (2008+): the key (after an optional ".gz") ends with the archive-format
+		//     version suffix "_V<NN>" — "_V06" (super-res + dual-pol, 2013+, all moments incl. CC) and
+		//     "_V03".."_V05" (~2008-2012: refl/vel/spectrum-width, NO dual-pol → empty CC). Message 31.
+		//   • Legacy (pre-~2008): NO version suffix, "<ICAO><yyyyMMdd>_<HHmmss>" (AR2V0001 / Message 1).
+		//     gzip-wrapped → fully-uncompressed AR2V (no per-record bzip2). The vendored decoder's
+		//     Message-1 path reads these; C# can't single-tilt extract them (no Message-31 moment
+		//     markers / no LDM bzip2 records), so EnsureCachedAsync's fallback caches the whole
+		//     gunzipped volume and the WebView decodes the lowest tilt.
+		// It deliberately EXCLUDES the "_MDM" metadata sidecars in both eras.
+		private static bool IsVolumeKey(string key)
+		{
+			var name = key.EndsWith(".gz", StringComparison.Ordinal) ? key[..^3] : key;
+			name = name.Substring(name.LastIndexOf('/') + 1);
+			if (name.Contains("_MDM", StringComparison.Ordinal))
+			{
+				return false; // metadata sidecar, not a volume
+			}
+
+			// Modern: "..._V06" (also _V03.._V05).
+			if (name.Length >= 4
+				&& name[^4] == '_' && name[^3] == 'V'
+				&& char.IsDigit(name[^2]) && char.IsDigit(name[^1]))
+			{
+				return true;
+			}
+
+			// Legacy: "<ICAO><yyyyMMdd>_<HHmmss>" — 4-char ICAO, 8-digit date, '_', 6-digit time.
+			return name.Length == 19
+				&& char.IsLetter(name[0])
+				&& name[12] == '_'
+				&& AllDigits(name, 4, 8)
+				&& AllDigits(name, 13, 6);
+		}
+
+		private static bool AllDigits(string s, int start, int count)
+		{
+			for (var i = start; i < start + count; i++)
+			{
+				if (!char.IsDigit(s[i]))
+				{
+					return false;
+				}
+			}
+			return true;
+		}
+
+		// Decompresses a gzip-wrapped archive volume (older dates are stored as ..._V0x.gz). The
+		// inner bytes are the same AR2V format TryExtractLowestTilt reads.
+		private static byte[] Gunzip(byte[] gz)
+		{
+			using var input = new MemoryStream(gz);
+			using var gzip = new System.IO.Compression.GZipStream(input, System.IO.Compression.CompressionMode.Decompress);
+			using var output = new MemoryStream(gz.Length * 4);
+			gzip.CopyTo(output);
+			return output.ToArray();
 		}
 
 		private static DateTimeOffset? ParseVolumeTime(string key)

@@ -24,6 +24,14 @@ namespace OfflineMapsTest.Services
 		Task<IReadOnlyList<string>> GetRecentKeysAsync(RadarSite site, int count, CancellationToken cancellationToken = default);
 
 		/// <summary>
+		/// Returns the keys of every volume for the site whose scan time falls within the given UTC
+		/// window, oldest-first — the Past Event Viewer's source. Lists each UTC day the window
+		/// touches (handles a window that crosses midnight). Listing only; the caller fetches the
+		/// volumes it wants via <see cref="EnsureCachedAsync"/>.
+		/// </summary>
+		Task<IReadOnlyList<string>> GetKeysForWindowAsync(RadarSite site, System.DateTimeOffset startUtc, System.DateTimeOffset endUtc, CancellationToken cancellationToken = default);
+
+		/// <summary>
 		/// Ensures the volume for <paramref name="key"/> is downloaded + lowest-tilt-extracted
 		/// to the cache (reusing it if already present), returning its overlay descriptor, or
 		/// null if the fetch failed.
