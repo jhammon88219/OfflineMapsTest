@@ -15,11 +15,11 @@
   </PropertyGroup>
   <ItemGroup>
     <None Remove="Assets\Map\map.html" />
-    <None Remove="Assets\Map\map.js" />
-    <None Remove="Assets\Map\radar.js" />
-    <None Remove="Assets\Map\radar-decode.js" />
-    <None Remove="Assets\Map\radar-ramps.js" />
-    <None Remove="Assets\Map\radar-worker.js" />
+    <None Remove="Assets\Map\js\map.js" />
+    <None Remove="Assets\Map\js\radar.js" />
+    <None Remove="Assets\Map\js\radar-decode.js" />
+    <None Remove="Assets\Map\js\radar-ramps.js" />
+    <None Remove="Assets\Map\js\radar-worker.js" />
     <None Remove="Assets\Map\vendor\nexrad-level-2-data.esm.js" />
     <None Remove="Assets\Map\vendor\seek-bzip.esm.js" />
     <None Remove="Assets\Map\vendor\maplibre-gl.css" />
@@ -70,19 +70,34 @@
     <Content Update="Assets\Map\map.html">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
-    <Content Update="Assets\Map\map.js">
+    <Content Update="Assets\Map\js\map.js">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
-    <Content Update="Assets\Map\radar.js">
+    <Content Update="Assets\Map\js\radar.js">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
-    <Content Update="Assets\Map\radar-decode.js">
+    <Content Update="Assets\Map\js\radar-decode.js">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
-    <Content Update="Assets\Map\radar-ramps.js">
+    <Content Update="Assets\Map\js\geo.js">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
-    <Content Update="Assets\Map\radar-worker.js">
+    <Content Update="Assets\Map\js\markers.js">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Update="Assets\Map\js\radar-sites.js">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Update="Assets\Map\js\watches.js">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Update="Assets\Map\js\outlook.js">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Update="Assets\Map\js\radar-ramps.js">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Update="Assets\Map\js\radar-worker.js">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
     <Content Update="Assets\Map\vendor\nexrad-level-2-data.esm.js">

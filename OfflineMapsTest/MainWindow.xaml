@@ -211,7 +211,7 @@
                                             Value="{x:Bind ViewModel.RadarOpacity, Mode=TwoWay}"/>
                                     <ToggleButton HorizontalAlignment="Stretch"
                                                   IsChecked="{x:Bind ViewModel.IsInspecting, Mode=OneWay}"
-                                                  IsEnabled="{x:Bind ViewModel.HasRadarLoop, Mode=OneWay}"
+                                                  IsEnabled="{x:Bind ViewModel.HasRadarDisplay, Mode=OneWay}"
                                                   ToolTipService.ToolTip="Inspect — read the product value under the cursor"
                                                   Click="OnToggleInspectClick">
                                         <StackPanel Orientation="Horizontal" Spacing="6">

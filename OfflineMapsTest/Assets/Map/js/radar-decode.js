@@ -4,6 +4,7 @@
 // (~5 s for a full volume), which is exactly why we run it off the UI thread.
 
 import { REFLECTIVITY_RAMP, VELOCITY_RAMP, CORRELATION_RAMP, rampColor } from './radar-ramps.js';
+import { metersPerDeg } from './geo.js';
 
 const HALF_BEAM_DEG = 0.5; // half the super-res azimuthal spacing (~1° beam)
 const D2R = Math.PI / 180;
@@ -19,7 +20,7 @@ let decoderPromise = null;
 function loadDecoder() {
     if (!decoderPromise) {
         globalThis.process = globalThis.process || { env: {}, browser: true };
-        decoderPromise = import('./vendor/nexrad-level-2-data.esm.js').then(function (mod) {
+        decoderPromise = import('../vendor/nexrad-level-2-data.esm.js').then(function (mod) {
             return { Buffer: mod.Buffer, Level2Radar: mod.Level2Radar };
         });
     }
@@ -65,8 +66,7 @@ function momentRadials(radar, moment) {
 // velocity so the geometry math stays identical.
 function buildGates(radials, getAzimuth, siteLat, siteLon, colorFn) {
     if (!radials || !radials.length) return null;
-    const mPerDegLat = 111320;
-    const mPerDegLon = 111320 * Math.cos(siteLat * D2R);
+    const { mPerDegLat, mPerDegLon } = metersPerDeg(siteLat); // canonical projection — see geo.js (per-gate formula stays inline below for perf)
     const positions = [];
     const colors = [];
     const PI = Math.PI;
@@ -546,25 +546,9 @@ function buildCorrelation(radar, siteLat, siteLon, minDbz) {
     // Legacy Message-1 (single-pol) volumes have no ρHV at all, so bail before building anything.
     if (!ccR.some(function (c) { return c && c.moment_data; })) return { geom: null, grid: null };
 
-    const masked = new Array(ccR.length);
-    for (let i = 0; i < ccR.length; i++) {
-        const c = ccR[i];
-        if (!c || !c.moment_data) { masked[i] = c; continue; }
-        const r = reflR[i];
-        const rd = r && r.moment_data;
-        const out = new Array(c.moment_data.length);
-        for (let j = 0; j < c.moment_data.length; j++) {
-            let keep = false;
-            if (rd) {
-                const range = c.first_gate + j * c.gate_size;       // km
-                const rj = Math.round((range - r.first_gate) / r.gate_size);
-                const rv = (rj >= 0 && rj < rd.length) ? rd[rj] : null;
-                keep = (rv !== null && rv !== undefined && rv >= minDbz);
-            }
-            out[j] = keep ? c.moment_data[j] : null;
-        }
-        masked[i] = { moment_data: out, first_gate: c.first_gate, gate_size: c.gate_size };
-    }
+    // CC is only meaningful where there's precip — mask it to reflectivity >= minDbz (shared with the
+    // DOW velocity mask). Without it, clear-air / clutter ρHV speckles the whole domain.
+    const masked = maskByReflectivity(ccR, reflR, minDbz);
 
     const getAz = function (i) { return radar.getAzimuth(i); };
     const geom = buildGates(masked, getAz, siteLat, siteLon, function (v) {
@@ -576,13 +560,6 @@ function buildCorrelation(radar, siteLat, siteLon, minDbz) {
     return { geom: geom, grid: buildGrid(ccR, getAz, 1000, CORRELATION_RAMP.unit, 2) };
 }
 
-// Decodes a normalized DOW frame (the "dow-frame/1" JSON from tools/dow_import.py) into the SAME
-// { geom, velGeom, ccGeom, grids, rangeMeters, ... } result decodeAndBuild returns — so the host
-// renders a mobile-radar sweep through the identical RadarLayer pipeline (WebGL fill + range ring +
-// Inspect + legend). A DOW frame is ONE sweep at the truck's lat/lon: true azimuths per radial +
-// Int16-quantized moment arrays. Velocity is ALREADY dealiased by the converter (Py-ART), so we do
-// NOT run dealiasSweep here. Synchronous — no vendored decoder is needed (this is our own format).
-// `minDbz` thresholds reflectivity (and masks CC) exactly like the NEXRAD path.
 // Masks a moment's radials to only where the co-located reflectivity gate is >= minDbz (aligned by
 // RANGE). DOW velocity exists at EVERY gate — including clear-air / biological (insect) returns that
 // carry a real-but-meaningless velocity — so without this the whole domain renders as velocity speckle.
@@ -611,6 +588,13 @@ function maskByReflectivity(radials, reflRadials, minDbz) {
     return out;
 }
 
+// Decodes a normalized DOW frame (the "dow-frame/1" JSON from tools/dow_import.py) into the SAME
+// { geom, velGeom, ccGeom, grids, rangeMeters, ... } result decodeAndBuild returns — so the host
+// renders a mobile-radar sweep through the identical RadarLayer pipeline (WebGL fill + range ring +
+// Inspect + legend). A DOW frame is ONE sweep at the truck's lat/lon: true azimuths per radial +
+// Int16-quantized moment arrays. Velocity is ALREADY dealiased by the converter (Py-ART), so we do
+// NOT run dealiasSweep here. Synchronous — no vendored decoder is needed (this is our own format).
+// `minDbz` thresholds reflectivity (and masks CC) exactly like the NEXRAD path.
 export function decodeDowFrame(json, minDbz) {
     const t0 = (typeof performance !== 'undefined') ? performance.now() : 0;
     const az = json.azimuth || [];
@@ -666,25 +650,7 @@ export function decodeDowFrame(json, minDbz) {
     // CC (dual-pol DOW only), masked by reflectivity — aligned by RANGE, same as the NEXRAD path.
     let ccGeom = null, ccGrid = null;
     if (ccR) {
-        const masked = new Array(ccR.length);
-        for (let i = 0; i < ccR.length; i++) {
-            const c = ccR[i];
-            if (!c || !c.moment_data) { masked[i] = c; continue; }
-            const r = reflR && reflR[i];
-            const rd = r && r.moment_data;
-            const out = new Array(c.moment_data.length);
-            for (let j = 0; j < c.moment_data.length; j++) {
-                let keep = false;
-                if (rd) {
-                    const range = c.first_gate + j * c.gate_size;
-                    const rj = Math.round((range - r.first_gate) / r.gate_size);
-                    const rv = (rj >= 0 && rj < rd.length) ? rd[rj] : null;
-                    keep = (rv !== null && rv !== undefined && rv >= minDbz);
-                }
-                out[j] = keep ? c.moment_data[j] : null;
-            }
-            masked[i] = { moment_data: out, first_gate: c.first_gate, gate_size: c.gate_size };
-        }
+        const masked = maskByReflectivity(ccR, reflR, minDbz);
         ccGeom = buildGates(masked, getAz, lat, lon, function (v) {
             if (v === null || v === undefined) return null;
             return rampColor(CORRELATION_RAMP, v);

@@ -482,7 +482,9 @@ namespace OfflineMapsTest.ViewModels
 				_syncingSelection = true;
 				SelectedSiteRow = value?.Site is { } site && _rowBySite.TryGetValue(site, out var row) ? row : null;
 				_syncingSelection = false;
+				_dowShowing = false; // a NEXRAD selection takes over the radar layer from any DOW frame
 				OnPropertyChanged(nameof(HasRadarLoop));
+				OnPropertyChanged(nameof(HasRadarDisplay));
 				OnPropertyChanged(nameof(HasColorScale));
 				RaiseRadarCard();
 				// In Past Event mode a site pick just sets the target (the Load button drives the
@@ -500,6 +502,10 @@ namespace OfflineMapsTest.ViewModels
 
 		/// <summary>Whether a radar site is selected (drives the loop controls' visibility).</summary>
 		public bool HasRadarLoop => _selectedRadarOption?.Site is not null;
+
+		/// <summary>Whether ANY radar frame is currently displayed — a NEXRAD loop OR a DOW frame. Gates
+		/// the product Inspect toggle and the Color Scale legend, which apply to both sources.</summary>
+		public bool HasRadarDisplay => HasRadarLoop || _dowShowing;
 
 		// ── Past Event Viewer ────────────────────────────────────────────────────────────────────
 		// A second radar "mode": instead of the live loop (recent volumes + a near-real-time frame
@@ -524,6 +530,7 @@ namespace OfflineMapsTest.ViewModels
 		private int _dowEventIndex;
 		private string _dowStatus = string.Empty;
 		private int _dowProductIndex; // 0 = reflectivity, 1 = velocity
+		private bool _dowShowing;     // a DOW frame is currently displayed (separate from a NEXRAD loop)
 
 		/// <summary>The curated DOW frames available to view (empty until events are converted + bundled).</summary>
 		public IReadOnlyList<DowEvent> DowEvents { get; private set; } = System.Array.Empty<DowEvent>();
@@ -582,6 +589,9 @@ namespace OfflineMapsTest.ViewModels
 				await _mapService.ShowDowFrameAsync(ev.Url);
 				await _mapService.SetRadarProductAsync(_dowProductIndex == 1 ? "velocity" : "reflectivity");
 				DowStatus = $"Showing {ev.Label}";
+				_dowShowing = true;
+				OnPropertyChanged(nameof(HasRadarDisplay)); // enable Inspect + Color Scale for the DOW frame
+				OnPropertyChanged(nameof(HasColorScale));
 			}
 			catch (Exception ex)
 			{
@@ -593,6 +603,9 @@ namespace OfflineMapsTest.ViewModels
 		public async Task ClearDowEventAsync()
 		{
 			await _mapService.ClearDowFrameAsync();
+			_dowShowing = false;
+			OnPropertyChanged(nameof(HasRadarDisplay));
+			OnPropertyChanged(nameof(HasColorScale));
 			DowStatus = string.Empty;
 		}
 
@@ -1112,7 +1125,7 @@ namespace OfflineMapsTest.ViewModels
 		public RadarRampInfo? CurrentRamp => _currentRamp;
 
 		/// <summary>Whether to show the color-scale legend (a product ramp is known + a loop is active).</summary>
-		public bool HasColorScale => _currentRamp is not null && HasRadarLoop;
+		public bool HasColorScale => _currentRamp is not null && HasRadarDisplay;
 
 		/// <summary>Legend heading, e.g. "Reflectivity (dBZ)".</summary>
 		public string RampTitle => _currentRamp is { } r ? $"{r.Label} ({r.Unit})" : string.Empty;

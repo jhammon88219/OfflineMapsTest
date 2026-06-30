@@ -10,10 +10,23 @@
 (function () {
     'use strict';
 
+    // radar.js's own URL, captured at load time (document.currentScript is valid during this
+    // synchronous IIFE). The worker is resolved relative to THIS file rather than the page, so it
+    // keeps working when radar.js lives in a subfolder — a Worker URL otherwise resolves against the
+    // document's base URL (the page), not the calling script, which would 404 → silent main-thread fallback.
+    const SELF_SCRIPT = (document.currentScript && document.currentScript.src) || location.href;
+
     const LAYER_ID = 'level2-radar';
     const MIN_DBZ = 10;
-    const D2R = Math.PI / 180;
     const GRID_NODATA = -32768; // matches radar-decode.js buildGrid sentinel
+
+    // Shared site projection (geo.js — the SAME math radar-decode's buildGates uses, so overlays line
+    // up with the painted gates). radar.js is a classic-script IIFE so it can't statically import; load
+    // the module once at startup and cache it in `Geo`. Until it resolves, the geo-dependent overlays
+    // (range ring, sweep, inspector) skip drawing and re-draw on the next frame/tick/mousemove — geo.js
+    // is a tiny same-origin file, loaded long before any radar frame can decode.
+    let Geo = null;
+    import('./geo.js').then(function (m) { Geo = m; }).catch(function (e) { hostLog('geo.js load failed: ' + (e && e.message ? e.message : e)); });
 
     // frames[index] = { positions, colors, count, velPositions, velColors, velCount }: the
     // reflectivity AND velocity gate geometry (each with baked colors), so switching product is
@@ -110,7 +123,7 @@
     function getWorker() {
         if (worker === undefined) {
             try {
-                worker = new Worker('radar-worker.js');
+                worker = new Worker(new URL('radar-worker.js', SELF_SCRIPT).href);
                 worker.onmessage = function (e) { applyFrameResult(e.data); };
                 worker.onerror = function (e) { hostLog('worker error: ' + (e && e.message ? e.message : e)); };
             } catch (e) {
@@ -119,6 +132,24 @@
             }
         }
         return worker;
+    }
+
+    // Flattens a decode result (r2 from decodeAndBuild / decodeDowFrame: { geom, velGeom, ccGeom,
+    // reflGrid, ... }) into the flat message shape applyFrameResult consumes. Used by the main-thread
+    // decode fallback and the DOW path. NOTE: the Worker (radar-worker.js) builds this same shape itself
+    // rather than calling here, because it must pass the typed-array buffers as postMessage transferables
+    // — a worker-only concern, and the worker can't reach this IIFE-private helper anyway.
+    function frameResultFrom(r2, token, index) {
+        return {
+            token: token, index: index, empty: !r2.geom && !r2.velGeom && !r2.ccGeom,
+            positions: r2.geom && r2.geom.positions, colors: r2.geom && r2.geom.colors, count: r2.geom && r2.geom.count,
+            velPositions: r2.velGeom && r2.velGeom.positions, velColors: r2.velGeom && r2.velGeom.colors, velCount: r2.velGeom && r2.velGeom.count,
+            ccPositions: r2.ccGeom && r2.ccGeom.positions, ccColors: r2.ccGeom && r2.ccGeom.colors, ccCount: r2.ccGeom && r2.ccGeom.count,
+            reflGrid: r2.reflGrid, velGrid: r2.velGrid, ccGrid: r2.ccGrid, rangeMeters: r2.rangeMeters,
+            decodeMs: r2.decodeMs, buildMs: r2.buildMs, radials: r2.radials, gates: r2.gates, bytes: r2.bytes,
+            elevList: r2.elevList, velElev: r2.velElev, reflStats: r2.reflStats, velStats: r2.velStats,
+            velNyq: r2.velNyq, dealias: r2.dealias,
+        };
     }
 
     function applyFrameResult(res) {
@@ -311,16 +342,14 @@
     // lines up exactly with the data's edge.
     function ringGeoJSON() {
         const N = 128, R = currentRangeMeters;
-        const mPerDegLat = 111320, mPerDegLon = 111320 * Math.cos(siteLat * D2R);
         const coords = [];
         for (let k = 0; k <= N; k++) {
-            const t = (k / N) * 2 * Math.PI;
-            coords.push([siteLon + (R * Math.sin(t)) / mPerDegLon, siteLat + (R * Math.cos(t)) / mPerDegLat]);
+            coords.push(Geo.siteToLngLat(siteLat, siteLon, R, (k / N) * 2 * Math.PI));
         }
         return { type: 'Feature', geometry: { type: 'LineString', coordinates: coords } };
     }
     function addRangeRing(map) {
-        if (!map || !(currentRangeMeters > 0)) return;
+        if (!map || !(currentRangeMeters > 0) || !Geo) return; // geo.js not loaded yet -> redraws on next setRangeRing
         if (map.getSource(RANGE_SRC)) map.getSource(RANGE_SRC).setData(ringGeoJSON());
         else map.addSource(RANGE_SRC, { type: 'geojson', data: ringGeoJSON() });
         if (!map.getLayer(RANGE_LAYER)) {
@@ -353,14 +382,11 @@
     // A line from the site centre to the range-ring edge at the current bearing (0 = due north),
     // using the same metres-per-degree approximation as the ring/gates so it tracks the circle.
     function sweepArmGeoJSON(angleRad) {
-        const R = currentRangeMeters;
-        const mPerDegLat = 111320, mPerDegLon = 111320 * Math.cos(siteLat * D2R);
-        const lon2 = siteLon + (R * Math.sin(angleRad)) / mPerDegLon;
-        const lat2 = siteLat + (R * Math.cos(angleRad)) / mPerDegLat;
-        return { type: 'Feature', geometry: { type: 'LineString', coordinates: [[siteLon, siteLat], [lon2, lat2]] } };
+        const tip = Geo.siteToLngLat(siteLat, siteLon, currentRangeMeters, angleRad);
+        return { type: 'Feature', geometry: { type: 'LineString', coordinates: [[siteLon, siteLat], tip] } };
     }
     function ensureSweepLayer(map) {
-        if (!map || !(currentRangeMeters > 0)) return;
+        if (!map || !(currentRangeMeters > 0) || !Geo) return; // geo.js not loaded yet
         if (!map.getSource(SWEEP_SRC)) map.addSource(SWEEP_SRC, { type: 'geojson', data: sweepArmGeoJSON(0) });
         if (!map.getLayer(SWEEP_LAYER)) {
             // Added after the range ring → sits on top of the ring + radar fill.
@@ -378,7 +404,7 @@
         if (sweepPeriodMs <= 0) { sweepRaf = 0; return; } // disabled — stop the loop
         // Keep the loop alive while active; just skip drawing until the range + layer exist (the
         // host can start the sweep before the first frame decodes, i.e. before there's a radius).
-        if (currentMap && currentRangeMeters > 0) {
+        if (currentMap && currentRangeMeters > 0 && Geo) {
             const frac = ((performance.now() - sweepT0) % sweepPeriodMs) / sweepPeriodMs;
             const src = currentMap.getSource(SWEEP_SRC);
             if (src) src.setData(sweepArmGeoJSON(frac * 2 * Math.PI));
@@ -401,19 +427,7 @@
                 import('./radar-decode.js').then(function (m) {
                     return m.decodeAndBuild(ab, siteLat, siteLon, MIN_DBZ);
                 }).then(function (r2) {
-                    applyFrameResult({
-                        token: myToken, index: index, empty: !r2.geom && !r2.velGeom && !r2.ccGeom,
-                        positions: r2.geom && r2.geom.positions, colors: r2.geom && r2.geom.colors,
-                        count: r2.geom && r2.geom.count,
-                        velPositions: r2.velGeom && r2.velGeom.positions, velColors: r2.velGeom && r2.velGeom.colors,
-                        velCount: r2.velGeom && r2.velGeom.count,
-                        ccPositions: r2.ccGeom && r2.ccGeom.positions, ccColors: r2.ccGeom && r2.ccGeom.colors,
-                        ccCount: r2.ccGeom && r2.ccGeom.count,
-                        reflGrid: r2.reflGrid, velGrid: r2.velGrid, ccGrid: r2.ccGrid, rangeMeters: r2.rangeMeters,
-                        decodeMs: r2.decodeMs, buildMs: r2.buildMs, radials: r2.radials, gates: r2.gates, bytes: r2.bytes,
-                        elevList: r2.elevList, velElev: r2.velElev, reflStats: r2.reflStats, velStats: r2.velStats,
-                        velNyq: r2.velNyq, dealias: r2.dealias,
-                    });
+                    applyFrameResult(frameResultFrom(r2, myToken, index));
                 }).catch(function (err) {
                     applyFrameResult({ token: myToken, index: index, error: String(err && err.message ? err.message : err) });
                 });
@@ -457,11 +471,9 @@
     // Reads the moment value at a geographic point from a polar value grid, or null (no data /
     // out of range). Mirrors buildGates' projection: x∝sin(az), y∝cos(az), az from north clockwise.
     function lookupValue(grid, lat, lng) {
-        if (!grid) return null;
-        const mPerDegLat = 111320, mPerDegLon = 111320 * Math.cos(siteLat * D2R);
-        const dx = (lng - siteLon) * mPerDegLon, dy = (lat - siteLat) * mPerDegLat;
-        const rangeKm = Math.sqrt(dx * dx + dy * dy) / 1000;
-        let azDeg = Math.atan2(dx, dy) / D2R; if (azDeg < 0) azDeg += 360;
+        if (!grid || !Geo) return null;
+        const polar = Geo.lngLatToPolar(siteLat, siteLon, lng, lat);
+        const rangeKm = polar.rangeMeters / 1000, azDeg = polar.azDeg;
         const j = Math.floor((rangeKm - grid.firstGate) / grid.gateSize);
         if (j < 0 || j >= grid.nGates) return null;
         // Nearest radial by azimuth (unsorted, ~720 entries — trivial per move). Reject if the
@@ -659,16 +671,7 @@
                 if (!r2 || myToken !== loopToken) return;
                 // Feed it as frame 0 — applyFrameResult adopts the first frame (currentFrame<0),
                 // (re)adds the layer, and draws the range ring from r2.rangeMeters.
-                applyFrameResult({
-                    token: myToken, index: 0, empty: !r2.geom && !r2.velGeom && !r2.ccGeom,
-                    positions: r2.geom && r2.geom.positions, colors: r2.geom && r2.geom.colors, count: r2.geom && r2.geom.count,
-                    velPositions: r2.velGeom && r2.velGeom.positions, velColors: r2.velGeom && r2.velGeom.colors, velCount: r2.velGeom && r2.velGeom.count,
-                    ccPositions: r2.ccGeom && r2.ccGeom.positions, ccColors: r2.ccGeom && r2.ccGeom.colors, ccCount: r2.ccGeom && r2.ccGeom.count,
-                    reflGrid: r2.reflGrid, velGrid: r2.velGrid, ccGrid: r2.ccGrid, rangeMeters: r2.rangeMeters,
-                    decodeMs: r2.decodeMs, buildMs: r2.buildMs, radials: r2.radials, gates: r2.gates, bytes: r2.bytes,
-                    elevList: r2.elevList, velElev: r2.velElev, reflStats: r2.reflStats, velStats: r2.velStats,
-                    velNyq: r2.velNyq, dealias: r2.dealias,
-                });
+                applyFrameResult(frameResultFrom(r2, myToken, 0));
             }).catch(function (err) {
                 hostLog('showDow failed: ' + (err && err.message ? err.message : err));
             });

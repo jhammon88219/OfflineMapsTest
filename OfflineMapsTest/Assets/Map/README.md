@@ -12,23 +12,42 @@ design, the project's irreducible non-C# surface. Everything that *can* be C# is
 
 | Path | What | Language-stats |
 |------|------|----------------|
-| `map.html` | Page shell loaded by the WebView (`mapassets/map.html`). | counted |
-| `map.js` `radar.js` `radar-decode.js` `radar-worker.js` | **Our authored JS** — the code we had to write in JS. ~34 KB total. | counted |
+| `map.html` | Page shell loaded by the WebView (`mapassets/map.html`); stays at the root. | counted |
+| `js/` | **Our authored JS** — the orchestrator + 4 feature modules + the radar pipeline (see below). | counted |
 | `vendor/` | **Third-party libraries**, vendored verbatim (not our code). ~1.2 MB. | `linguist-vendored` (excluded) |
 | `style*.json` (basemaps, at root), `fonts/`, `sprites/` | **Data/config**, not code. | n/a |
 
 `vendor/` is marked `linguist-vendored` in the repo-root `.gitattributes`, so the GitHub
-language bar reflects the ~34 KB of JS we actually wrote, not the ~1.2 MB of libraries.
+language bar reflects the JS we actually wrote (in `js/`), not the ~1.2 MB of libraries.
 
-## Our authored JS — why each file must be JS
+## Our authored JS (`js/`) — why each file must be JS
 
-- **`map.js`** — boots the single MapLibre map from URL params, registers the `pmtiles://`
-  protocol, and exposes the `window.*` command shims the host drives. Pure WebView/MapLibre.
-- **`radar.js`** — the NEXRAD radar **WebGL custom layer** (dBZ ramp) + frame store + render
-  loop. Custom GPU rendering ⇒ must be JS. The single heaviest reason this folder exists.
-- **`radar-decode.js`** — bzip2-decodes a single-tilt `.V06` and builds the gate geometry.
-  Runs in the WebView (and the worker); the host already does the *fetch/extract* in C#.
+All authored modules live in **`js/`** (the page, styles, and `fonts/`/`sprites/`/`vendor/` stay at the
+Map root). `map.html` loads `js/map.js` + `js/radar.js` as classic `<script>`s; those dynamically
+`import()` the rest. `radar.js` resolves the worker relative to **its own** URL (not the page), and
+`radar-decode.js` imports the vendored decoder via `../vendor/` — both so the split survives the move.
+
+**Orchestrator**
+- **`map.js`** — boots the single MapLibre map from URL params, registers `pmtiles://`, owns the
+  `window.*` command shims + `applyStyle` (re-adds overlays after a basemap switch), and **delegates**
+  each feature to a module. A thin (~150-line) orchestrator, not a god file.
+
+**Feature modules** — each owns one overlay's state + logic; `map.js` delegates to it:
+- **`outlook.js`** — SPC outlook fills + per-CIG hatching + nested-polygon clipping.
+- **`watches.js`** — Tornado / Severe-T-storm watch boxes.
+- **`radar-sites.js`** — the on-map site-marker "key" buttons + their CSS.
+- **`markers.js`** — the user-location marker.
+
+**Radar pipeline** — file → colored gates on the GPU:
+- **`radar.js`** — the NEXRAD/DOW **WebGL custom layer** + frame store + render loop + range ring +
+  sweep + Inspect (`window.RadarLayer`). Custom GPU rendering ⇒ must be JS; the heaviest reason this
+  folder exists.
+- **`radar-decode.js`** — decodes a single-tilt `.V06` / a DOW frame, builds the gate geometry, and
+  dealiases velocity. Pure (no DOM/GL); runs in the worker and as a main-thread fallback.
 - **`radar-worker.js`** — a Web Worker that runs the decode off the UI thread. Worker ⇒ JS.
+- **`radar-ramps.js`** — the color scales (one source of truth, shared by the decoder AND the legend).
+- **`geo.js`** — the one site projection (shared by `radar-decode.js` AND `radar.js`'s ring/inspector,
+  so overlays line up with the painted gates).
 
 ## The C# ↔ JS contract (one seam)
 

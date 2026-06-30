@@ -39,21 +39,32 @@ MVVM with interface seams, hand-wired in the `MainWindow` constructor (no DI con
   `ILocationService` / `LocationService` (resolves the user's location — `GetFromOperatingSystemAsync`
   via `Windows.Devices.Geolocation`, `GetFromIpAddressAsync` via an HTTPS IP lookup, and `ResolveAsync`
   = OS then IP fallback — see "User location" below).
-- **`Assets/Map/map.js`** is ONE parameterized page loaded by `map.html` in the single
-  WebView. URL params: `key`, `interactive`, `style`, `lng`, `lat`, `zoom`. It exposes
-  `window.applyStyle`, `flyTo`, `showOutlook` / `clearOutlook` / `setOutlookOpacity`,
-  `radarBeginLoop` / `radarAddFrame` / `radarShowFrame` / `clearLevel2Radar` /
-  `setRadarOpacity`, `showRadarSites` / `setSelectedRadarSite`, `showUserLocation` /
-  `clearUserLocation` (the pulsing-blue user-location marker), and posts
-  `{type:"mapReady"}` (and `radarSiteClick` / `radarFrameReady`) on the message channel.
-  MapLibre is **v5.21.1**.
-- **Radar JS (4 files under `Assets/Map`):** `radar.js` owns the **MapLibre WebGL custom
+- **`Assets/Map/js/map.js`** is the parameterized page loaded by `map.html` in the single WebView. URL
+  params: `key`, `interactive`, `style`, `lng`, `lat`, `zoom`. It is the **orchestrator** (~150 lines):
+  it creates the MapLibre map, owns `window.applyStyle` (which re-adds every overlay after a basemap
+  switch — outlook, watches, radar), `flyTo`, the thin radar/DOW `window.*` shims, the color-ramp feed,
+  `setRadarSweep`, and posts `{type:"mapReady"}` (and `radarSiteClick` / `radarFrameReady`) on the
+  message channel. **The per-feature LOGIC was split out of `map.js` into focused ES modules** (it was a
+  ~620-line god file): `outlook.js` (SPC outlook fills + per-CIG hatching + nested-polygon clipping),
+  `watches.js` (watch boxes), `radar-sites.js` (the on-map site-marker "key" buttons + their CSS),
+  `markers.js` (the pulsing-blue user-location marker), and `geo.js` (the ONE site projection, shared
+  with `radar-decode.js`). **Mechanism:** `map.js` stays a classic `<script>` and **dynamically
+  `import()`s** each module once at startup, caching it (e.g. `var Outlook = null; import('./outlook.js')
+  .then(m => Outlook = m)`); the `window.*` shims + `applyStyle`'s re-add then **delegate** to those
+  modules, passing the `map` instance (`window.showOutlook = url => Outlook && Outlook.show(map, url)`).
+  Each concern module owns its own state + a `reAdd(map)` for basemap switches. `geo.js` is imported
+  **statically** by `radar-decode.js` (a real module) but **dynamically + cached** by the classic-script
+  `radar.js`/`map.js` (guards skip drawing until it loads — it's tiny, loads before any frame). MapLibre
+  is **v5.21.1**.
+- **Radar JS (under `Assets/Map/js`):** `radar.js` owns the **MapLibre WebGL custom
   layer** + host shims (`window.RadarLayer`); `map.js` wires the shims and
   re-adds the layer after a style switch. The heavy work runs **off the UI thread** in
   `radar-worker.js`, which calls the shared `radar-decode.js` to bzip2-decode the `.V06`
   (vendored `nexrad-level-2-data` + `seek-bzip`), build the lowest-tilt reflectivity/velocity
-  gate geometry (velocity **dealiased** — see "Velocity product"), and color it via the shared
-  `radar-ramps.js` (the color scales, kept separate so a legend can reuse them); it then
+  gate geometry (velocity **dealiased** — see "Velocity product"), color it via the shared
+  `radar-ramps.js` (the color scales, kept separate so a legend can reuse them), and project it via the
+  shared `geo.js` (the ONE site equirectangular projection — also used by `radar.js`'s range ring /
+  sweep / inspector, so overlays line up with the painted gates); it then
   transfers the typed arrays back zero-copy. A main-thread fallback uses the same
   `radar-decode.js` if a Worker can't be created. The decoder is vendored offline (jsDelivr
   `+esm`, no Node/build step) — see "Vendoring the decoder" below. (NB: the cached single-tilt
@@ -691,7 +702,7 @@ the CS so the CS stays the lower number and the JS `Math.min(elevations)` still 
 reflectivity, while `findVelocityElevation` finds the higher-numbered Doppler for velocity; clear-air
 VCPs carry velocity in their single combined cut (no companion). Decode: `radar-decode.js` shares a
 `buildGates(radials, …, colorFn)` between `buildReflectivity` and `buildVelocity`; gate colors come
-from the shared `Assets/Map/radar-ramps.js` (see "Color ramps" below); `decodeAndBuild` returns
+from the shared `Assets/Map/js/radar-ramps.js` (see "Color ramps" below); `decodeAndBuild` returns
 `{geom, velGeom}` with baked colors so the host toggles product with no re-decode. `radar-worker.js` posts both geoms zero-copy; `radar.js` stores both per frame,
 tracks `product`/`uploadedProduct`, renders the selected moment (re-uploads on product switch — and
 only latches `uploadedFrame`/`uploadedProduct` once an upload actually happened, so a frame lacking
@@ -785,7 +796,7 @@ block in **cm/s** — divide by 100 (2584 → 25.84 m/s); using it raw made the 
 big so nothing ever unfolded. Debug log: `deal <N>reg seedMean<x> vad<ringsFit>/<rings> v[min,max]
 hi=<#>/<#>` — a healthy frame keeps `v` bounded (~±55) with `hi` (gates >55 m/s) near 0.
 
-**Color ramps — single source of truth** in `Assets/Map/radar-ramps.js`, imported by the decoder AND
+**Color ramps — single source of truth** in `Assets/Map/js/radar-ramps.js`, imported by the decoder AND
 the legend so they can't drift: `REFLECTIVITY_RAMP` (discrete NWS dBZ bands), `VELOCITY_RAMP` (smooth
 diverging m/s — pure green inbound → cyan/blue/magenta when strong; gray at zero; pure red outbound →
 pink/white when strong; deliberately **no orange/yellow**), `CORRELATION_RAMP` (smooth ρHV 0.2–1.05;
