@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- LoopControls — a transport-bar SECTION: play / stop / scrubber / frame time for the radar loop.
+     Binds a slice of RadarViewModel (set the ViewModel DP from the host). Composed into the
+     TransportBar's content slot in MainWindow. -->
+<UserControl
+    x:Class="OfflineMapsTest.Controls.Sections.LoopControls"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <Grid HorizontalAlignment="Center" MaxWidth="1100" ColumnSpacing="14">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="Auto"/>
+            <ColumnDefinition Width="520"/>
+            <ColumnDefinition Width="Auto"/>
+        </Grid.ColumnDefinitions>
+        <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+            <Button Width="42" Height="36" IsEnabled="{x:Bind ViewModel.IsLoopReady, Mode=OneWay}"
+                    ToolTipService.ToolTip="Play / pause" Click="OnTogglePlayClick">
+                <FontIcon Glyph="{x:Bind ViewModel.PlayPauseGlyph, Mode=OneWay}" FontSize="15"/>
+            </Button>
+            <Button Width="42" Height="36" IsEnabled="{x:Bind ViewModel.CanStopLoop, Mode=OneWay}"
+                    ToolTipService.ToolTip="Stop — halt playback and return to the newest frame"
+                    Click="OnStopLoopClick">
+                <FontIcon Glyph="&#xE71A;" FontSize="15"/>
+            </Button>
+        </StackPanel>
+        <Slider Grid.Column="1" VerticalAlignment="Center" Minimum="0"
+                Maximum="{x:Bind ViewModel.MaxFrameIndex, Mode=OneWay}" StepFrequency="1"
+                IsEnabled="{x:Bind ViewModel.IsLoopReady, Mode=OneWay}"
+                Value="{x:Bind ViewModel.CurrentFrameIndex, Mode=TwoWay}"/>
+        <TextBlock Grid.Column="2" VerticalAlignment="Center" MinWidth="86"
+                   Text="{x:Bind ViewModel.CurrentFrameTimeText, Mode=OneWay}"
+                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+    </Grid>
+</UserControl>

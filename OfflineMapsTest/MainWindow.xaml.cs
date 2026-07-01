@@ -304,7 +304,7 @@ namespace OfflineMapsTest
 						var ramp = JsonSerializer.Deserialize<Models.RadarRampInfo>(
 							rampEl.GetRawText(),
 							new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-						ViewModel.SetColorScale(ramp);
+						ViewModel.Radar.SetColorScale(ramp);
 					}
 					return;
 				}
@@ -315,7 +315,7 @@ namespace OfflineMapsTest
 				{
 					var has = root.TryGetProperty("has", out var hasEl) && hasEl.GetBoolean();
 					double? val = has && root.TryGetProperty("value", out var valEl) ? valEl.GetDouble() : null;
-					ViewModel.SetInspectValue(val);
+					ViewModel.Radar.SetInspectValue(val);
 					return;
 				}
 
@@ -324,7 +324,7 @@ namespace OfflineMapsTest
 				{
 					if (root.TryGetProperty("id", out var siteEl))
 					{
-						ViewModel.OnRadarSiteClicked(siteEl.GetString());
+						ViewModel.Radar.OnRadarSiteClicked(siteEl.GetString());
 					}
 					return;
 				}
@@ -357,7 +357,7 @@ namespace OfflineMapsTest
 					if (root.TryGetProperty("index", out var idxEl))
 					{
 						var hasData = root.TryGetProperty("hasData", out var hd) && hd.GetBoolean();
-						ViewModel.OnRadarFrameReady(idxEl.GetInt32(), hasData);
+						ViewModel.Radar.OnRadarFrameReady(idxEl.GetInt32(), hasData);
 					}
 					return;
 				}
@@ -376,40 +376,30 @@ namespace OfflineMapsTest
 			}
 		}
 
-		private void OnTogglePlayClick(object sender, RoutedEventArgs e)
-		{
-			ViewModel.ToggleRadarPlay();
-		}
-
-		private void OnStopLoopClick(object sender, RoutedEventArgs e)
-		{
-			ViewModel.StopRadarLoop();
-		}
-
 		private void OnLoadPastEventClick(object sender, RoutedEventArgs e)
 		{
-			_ = ViewModel.LoadSelectedPastEventAsync();
+			_ = ViewModel.Radar.LoadSelectedPastEventAsync();
 		}
 
 		private void OnLoadDowEventClick(object sender, RoutedEventArgs e)
 		{
-			_ = ViewModel.LoadDowEventAsync();
+			_ = ViewModel.Radar.LoadDowEventAsync();
 		}
 
 		private void OnClearDowEventClick(object sender, RoutedEventArgs e)
 		{
-			_ = ViewModel.ClearDowEventAsync();
+			_ = ViewModel.Radar.ClearDowEventAsync();
 		}
 
 		private void OnToggleRadarSitesClick(object sender, RoutedEventArgs e)
 		{
-			ViewModel.ToggleRadarSitesVisible();
+			ViewModel.Radar.ToggleRadarSitesVisible();
 		}
 
 		// Radar Loop tool window: hard-reset the current loop (dump + reload from scratch).
 		private void OnResetLoopClick(object sender, RoutedEventArgs e)
 		{
-			ViewModel.ResetRadarLoop();
+			ViewModel.Radar.ResetRadarLoop();
 		}
 
 		// Left tool-window dock: collapse + reveal both just flip the dock state.
@@ -455,7 +445,7 @@ namespace OfflineMapsTest
 		{
 			if (sender is Microsoft.UI.Xaml.Controls.Primitives.ToggleButton tb)
 			{
-				ViewModel.IsInspecting = tb.IsChecked == true;
+				ViewModel.Radar.IsInspecting = tb.IsChecked == true;
 			}
 		}
 
@@ -471,15 +461,11 @@ namespace OfflineMapsTest
 			ViewModel.RemoveSelectedMarker();
 		}
 
-		// The dock's "Radar Sites" list is two-way bound to ViewModel.SelectedSiteRow, so a row
-		// click selects the site and a map-marker pick highlights the row. ScrollIntoView isn't
-		// automatic on a programmatic SelectedItem change, so do it here when the selection moves.
+		// Previously scrolled the "Radar Sites" list to the programmatically-selected row. That list
+		// was stripped in the transport-bar redesign; this is a harmless no-op until the site list is
+		// re-added to the UI (restore the ScrollIntoView then).
 		private void OnViewModelPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
 		{
-			if (e.PropertyName == nameof(MapViewModel.SelectedSiteRow) && ViewModel.SelectedSiteRow is { } row)
-			{
-				RadarSitesListView?.ScrollIntoView(row);
-			}
 		}
 
 		// VS-style "active tool window" highlight: the card whose contents hold focus gets an

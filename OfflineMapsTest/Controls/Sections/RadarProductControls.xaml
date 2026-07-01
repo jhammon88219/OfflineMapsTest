@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- RadarProductControls — a transport-bar SECTION: the radar Product selector (+ a non-functional
+     Tilt stub for now). Binds a slice of RadarViewModel (set the ViewModel DP from the host).
+     Composed into the TransportBar's content slot in MainWindow. -->
+<UserControl
+    x:Class="OfflineMapsTest.Controls.Sections.RadarProductControls"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="16">
+        <ComboBox MinWidth="200"
+                  SelectedIndex="{x:Bind ViewModel.RadarProductIndex, Mode=TwoWay}">
+            <ComboBoxItem Content="Reflectivity"/>
+            <ComboBoxItem Content="Velocity"/>
+            <ComboBoxItem Content="Correlation Coefficient"/>
+        </ComboBox>
+        <ComboBox MinWidth="110" IsEnabled="False" SelectedIndex="0"
+                  ToolTipService.ToolTip="Tilt selection is not available yet">
+            <ComboBoxItem Content="0.5&#176;"/>
+        </ComboBox>
+    </StackPanel>
+</UserControl>
