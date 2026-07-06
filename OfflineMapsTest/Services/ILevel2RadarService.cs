@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -56,5 +57,12 @@ namespace OfflineMapsTest.Services
 		/// One date-prefix listing per day (today + yesterday); cheap.
 		/// </summary>
 		Task<IReadOnlyCollection<string>> GetLiveSiteIdsAsync(CancellationToken cancellationToken = default);
+
+		/// <summary>
+		/// Returns the site IDs that have any Level II data in the archive bucket over the UTC date(s)
+		/// the given window spans — used by the Past Event Viewer to gray out sites that were down or
+		/// didn't exist yet on that date. One date-prefix listing per day (the window spans ≤2 UTC days).
+		/// </summary>
+		Task<IReadOnlyCollection<string>> GetSiteIdsForDateAsync(DateTimeOffset startUtc, DateTimeOffset endUtc, CancellationToken cancellationToken = default);
 	}
 }

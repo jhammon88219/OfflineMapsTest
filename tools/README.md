@@ -96,6 +96,46 @@ storm farther out, bump `RANGE_KM` near the top of `radar_reference.py`.
 
 ---
 
+# Dealiasing regression check (`dealias_check.py`)
+
+A dev tool that **regression-checks the app's velocity dealiasing against Py-ART** without needing a
+JavaScript runtime. The app's dealiaser (`radar-decode.js` `dealiasSweep`, "v2") is a port of Py-ART's
+region-based algorithm; this script **re-implements that same algorithm in Python** (a faithful mirror
+of the JS, no scipy/Cython) and, on the *same* AWS volume the app uses, diffs it against Py-ART's own
+`dealias_region_based` — the scientific answer key.
+
+**Why it exists:** the dev box has no Node/deno/bun, so the JS can't be executed here directly. When
+you change `dealiasSweep`, mirror the edit in `dealias_v2()` in this script and re-run — if the couplet
+core stays within a few mph of Py-ART and agreement stays > ~99%, the change is safe to ship. It's how
+the v2 rewrite (which fixed violent-couplet unfolding — v1 capped the couplet near Nyquist) was
+validated before it went into the app.
+
+## Setup
+
+```
+python -m pip install arm_pyart      (same as radar_reference.py — see above)
+```
+
+## Using it
+
+```
+python dealias_check.py SITE YYYY MM DD HH MM        # time is UTC
+```
+
+Examples (known couplets):
+```
+python dealias_check.py KTLX 2013 05 20 20 12    # Moore EF5     -> Py-ART core ~ -135 mph
+python dealias_check.py KTLX 1999 05 03 23 46    # Bridge Creek F5 (legacy) -> core ~ -100 mph
+```
+
+It prints the Nyquist, the dealiased range from the mirror vs Py-ART, the whole-sweep agreement
+(fraction of gates that chose the same fold), and — the number that matters for a violent tornado —
+the **couplet core** value from both. A healthy result: couplet core within a few mph of Py-ART,
+agreement > ~99%. (`dealias_check.py` `dealias_v2()` must be kept in sync with the JS `dealiasSweep`;
+it does **not** import the app.)
+
+---
+
 # DOW importer (`dow_import.py`)
 
 A second, separate tool that converts a **mobile-radar sweep** — Doppler on Wheels (DOW), COW, NOXP,

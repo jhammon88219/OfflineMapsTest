@@ -49,12 +49,17 @@
     // basemap switches via reAdd). currentRangeMeters = the radius currently drawn (0 = none).
     const RANGE_SRC = 'level2-range', RANGE_LAYER = 'level2-range';
     let currentRangeMeters = 0;
-    // Sweep arm: a rotating line from the site centre out to the range ring, drawn ON THE MAP
-    // (scaled to the real coverage, RadarScope-style) — not a DOM decoration. Its own GeoJSON line
-    // layer, updated each animation frame. The host phase-locks it to the live-poll cycle via
-    // setSweep(periodSeconds): one revolution == the time until the next update. period 0 = off.
+    // Sweep pulse: a one-shot rotating arm + trailing afterglow, drawn ON THE MAP (scaled to the real
+    // coverage, RadarScope-style) — not a DOM decoration. The range ring is always shown; the arm only
+    // appears to do ONE revolution when the host reports a genuinely-new frame (pulseSweep), then hides.
+    // (Replaced the old continuous, phase-locked rotation.) Its own GeoJSON line layer, per-feature
+    // opacity so the trail fades leading→tail; updated each animation frame while a pulse is running.
     const SWEEP_SRC = 'level2-sweep', SWEEP_LAYER = 'level2-sweep';
-    let sweepPeriodMs = 0, sweepT0 = 0, sweepRaf = 0;
+    const SWEEP_MS = 1300;       // duration of one revolution
+    const SWEEP_FADE_MS = 400;   // brief fade-out of the trail once the revolution completes
+    const SWEEP_TRAIL_DEG = 70;  // angular length of the trailing afterglow behind the leading arm
+    const SWEEP_TRAIL_N = 18;    // trail segments (leading = brightest, tail = transparent)
+    let sweepAnimStart = 0, sweepRaf = 0;
 
     // Render-path diagnostics: render() runs every frame, so rate-limit its logging. We track
     // the running error/blank counts and only emit on the first occurrence + periodically, plus
@@ -364,52 +369,77 @@
         if (map && map.getSource(RANGE_SRC)) map.removeSource(RANGE_SRC);
     }
     // Draw/update the ring for the freshly-decoded range. Per-frame ranges are ~identical, so
-    // only rebuild when it actually changes (or a layer is missing, e.g. after a re-add). Also
-    // ensures the sweep layer once the range is known (the host may have started the sweep before
-    // the first frame decoded, i.e. before there was a radius to sweep).
+    // only rebuild when it actually changes (or a layer is missing, e.g. after a re-add). The sweep
+    // pulse owns its own layer (added on demand in pulseSweep), so nothing to ensure here.
     function setRangeRing(map, rangeMeters) {
         if (!map || !(rangeMeters > 0)) return;
         if (Math.abs(rangeMeters - currentRangeMeters) < 500 && map.getLayer(RANGE_LAYER)) {
-            if (sweepPeriodMs > 0) ensureSweepLayer(map); // range unchanged, but sweep may need its layer
             return;
         }
         currentRangeMeters = rangeMeters;
         addRangeRing(map);
-        if (sweepPeriodMs > 0) ensureSweepLayer(map);
     }
 
-    // ---- Sweep arm ----
-    // A line from the site centre to the range-ring edge at the current bearing (0 = due north),
-    // using the same metres-per-degree approximation as the ring/gates so it tracks the circle.
-    function sweepArmGeoJSON(angleRad) {
-        const tip = Geo.siteToLngLat(siteLat, siteLon, currentRangeMeters, angleRad);
-        return { type: 'Feature', geometry: { type: 'LineString', coordinates: [[siteLon, siteLat], tip] } };
+    // ---- Sweep pulse ----
+    // The trailing fan: SWEEP_TRAIL_N+1 radial lines from the site out to the range-ring edge, spanning
+    // SWEEP_TRAIL_DEG BEHIND the leading bearing (0 = due north), each carrying an `o` opacity so the
+    // line layer fades leading(bright)→tail(transparent). `fade` scales the whole trail for the end fade.
+    // Same metres-per-degree approximation as the ring/gates so the arm tracks the circle.
+    function sweepFanGeoJSON(leadRad, fade) {
+        const feats = [];
+        const step = (SWEEP_TRAIL_DEG * Math.PI / 180) / SWEEP_TRAIL_N;
+        for (let i = 0; i <= SWEEP_TRAIL_N; i++) {
+            const ang = leadRad - i * step;
+            if (ang < 0) break; // don't draw behind the sweep's start (north) on the first revolution
+            const o = (1 - i / SWEEP_TRAIL_N) * fade;
+            if (o <= 0.02) continue;
+            const tip = Geo.siteToLngLat(siteLat, siteLon, currentRangeMeters, ang);
+            feats.push({ type: 'Feature', properties: { o: o },
+                geometry: { type: 'LineString', coordinates: [[siteLon, siteLat], tip] } });
+        }
+        return { type: 'FeatureCollection', features: feats };
     }
     function ensureSweepLayer(map) {
         if (!map || !(currentRangeMeters > 0) || !Geo) return; // geo.js not loaded yet
-        if (!map.getSource(SWEEP_SRC)) map.addSource(SWEEP_SRC, { type: 'geojson', data: sweepArmGeoJSON(0) });
+        if (!map.getSource(SWEEP_SRC)) map.addSource(SWEEP_SRC, { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
         if (!map.getLayer(SWEEP_LAYER)) {
-            // Added after the range ring → sits on top of the ring + radar fill.
+            // Added after the range ring → sits on top of the ring + radar fill. Per-feature opacity.
             map.addLayer({
                 id: SWEEP_LAYER, type: 'line', source: SWEEP_SRC,
-                paint: { 'line-color': '#ffe8a8', 'line-width': 1.6, 'line-opacity': 0.8, 'line-blur': 0.4 },
+                paint: { 'line-color': '#ffe8a8', 'line-width': 1.6, 'line-blur': 0.4, 'line-opacity': ['get', 'o'] },
             }, beforeId(map));
         }
     }
-    function removeSweepLayer(map) {
+    function clearSweepData(map) {
+        const src = map && map.getSource(SWEEP_SRC);
+        if (src) src.setData({ type: 'FeatureCollection', features: [] });
+    }
+    // Stop any in-flight pulse and drop its layer (site change / clear / DOW / turn-off).
+    function stopSweep(map) {
+        if (sweepRaf) { cancelAnimationFrame(sweepRaf); sweepRaf = 0; }
         if (map && map.getLayer(SWEEP_LAYER)) map.removeLayer(SWEEP_LAYER);
         if (map && map.getSource(SWEEP_SRC)) map.removeSource(SWEEP_SRC);
     }
-    function sweepFrame() {
-        if (sweepPeriodMs <= 0) { sweepRaf = 0; return; } // disabled — stop the loop
-        // Keep the loop alive while active; just skip drawing until the range + layer exist (the
-        // host can start the sweep before the first frame decodes, i.e. before there's a radius).
-        if (currentMap && currentRangeMeters > 0 && Geo) {
-            const frac = ((performance.now() - sweepT0) % sweepPeriodMs) / sweepPeriodMs;
-            const src = currentMap.getSource(SWEEP_SRC);
-            if (src) src.setData(sweepArmGeoJSON(frac * 2 * Math.PI));
-        }
-        sweepRaf = requestAnimationFrame(sweepFrame);
+    function sweepPulseFrame() {
+        sweepRaf = 0;
+        if (!currentMap || !(currentRangeMeters > 0) || !Geo) return; // nothing to draw (e.g. layer dropped)
+        const el = performance.now() - sweepAnimStart;
+        if (el >= SWEEP_MS + SWEEP_FADE_MS) { clearSweepData(currentMap); return; } // revolution done → hide arm
+        let lead, fade;
+        if (el < SWEEP_MS) { lead = (el / SWEEP_MS) * 2 * Math.PI; fade = 1; }       // sweeping 0→360°
+        else { lead = 2 * Math.PI; fade = 1 - (el - SWEEP_MS) / SWEEP_FADE_MS; }     // hold at north, fade the trail out
+        const src = currentMap.getSource(SWEEP_SRC);
+        if (src) src.setData(sweepFanGeoJSON(lead, fade));
+        sweepRaf = requestAnimationFrame(sweepPulseFrame);
+    }
+    // Fire ONE sweep pulse (host calls this when a genuinely-new frame lands). Restarts if one is
+    // already mid-flight. No-op until a frame has decoded (no radius to sweep yet).
+    function startSweepPulse(map) {
+        currentMap = map;
+        if (!(currentRangeMeters > 0) || !Geo) return;
+        ensureSweepLayer(map);
+        sweepAnimStart = performance.now();
+        if (!sweepRaf) sweepRaf = requestAnimationFrame(sweepPulseFrame);
     }
 
     // Decodes one volume into frames[index] (off-thread, with a main-thread fallback).
@@ -504,7 +534,11 @@
         const r = lookupValue(inspectGrid(), e.lngLat.lat, e.lngLat.lng);
         const el = ensureInspectTip();
         if (r) {
-            const main = r.value.toFixed(r.digits) + (r.unit ? ' ' + r.unit : '');
+            // Velocity reads in familiar speed units (mph · km/h) rather than the raw m/s; other
+            // products keep their native unit (dBZ / unitless CC).
+            const main = product === 'velocity'
+                ? formatSpeed(r.value)
+                : r.value.toFixed(r.digits) + (r.unit ? ' ' + r.unit : '');
             // On Velocity, show the SAME gate's dealiasing breakdown so the unfold can be checked
             // without re-hovering: the displayed value is the dealiased speed; the raw (folded)
             // value is what the radar measured (within ±Nyquist), recovered by removing the whole
@@ -525,6 +559,11 @@
             el.style.display = 'none';
             pushInspect(false, 0);
         }
+    }
+
+    // Velocity in m/s → "±47 mph · ±76 km/h" (sign preserved: inbound negative, outbound positive).
+    function formatSpeed(ms) {
+        return (ms * 2.23694).toFixed(0) + ' mph · ' + (ms * 3.6).toFixed(0) + ' km/h';
     }
 
     // For a dealiased velocity value, recover the raw (folded) measurement + the fold count from the
@@ -553,7 +592,7 @@
             // New site → drop the old range ring + sweep (the first decoded frame redraws them at
             // the new site's range); same site (a reload) → keep them up, no flicker.
             if (lat !== siteLat || lon !== siteLon) {
-                removeRangeRing(map); removeSweepLayer(map); currentRangeMeters = 0;
+                removeRangeRing(map); stopSweep(map); currentRangeMeters = 0;
             }
             siteLat = lat; siteLon = lon;
             loopToken++;            // invalidate any in-flight frames from a previous loop
@@ -629,9 +668,8 @@
             pendingFrame = -1;
             removeLayer(map);
             removeRangeRing(map);
-            removeSweepLayer(map);
+            stopSweep(map);
             currentRangeMeters = 0;
-            sweepPeriodMs = 0;
             hostLog('clear token=' + loopToken);
         },
         // DOW Event Viewer: show a single curated mobile-radar frame (the "dow-frame/1" JSON from
@@ -650,9 +688,8 @@
             renderErrCount = blankCount = 0; lastRenderErrAt = lastBlankAt = 0;
             removeLayer(map);
             removeRangeRing(map);
-            removeSweepLayer(map);
-            currentRangeMeters = 0;
-            sweepPeriodMs = 0; // a DOW frame is a single sweep — no rotating arm
+            stopSweep(map);
+            currentRangeMeters = 0; // a DOW frame is a single sweep — no rotating arm
             hostLog('showDow ' + url);
             fetch(url, { cache: 'no-store' }).then(function (r) {
                 if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -680,17 +717,17 @@
             opacity = op;
             if (map.getLayer(LAYER_ID)) map.triggerRepaint();
         },
-        // Phase-lock the on-map sweep arm to the live-poll cycle. The host calls this at each cycle
-        // start with the seconds until the next poll; one revolution then spans that interval, so
-        // the arm completes as new data is due. period <= 0 stops + removes the sweep.
+        // Fire ONE sweep pulse (arm + trailing afterglow, one revolution then hides). The host calls
+        // this when a genuinely-new frame lands. No-op until a frame has decoded (no radius yet).
+        pulseSweep: function (map) {
+            startSweepPulse(map);
+        },
+        // Stop + remove the sweep (host calls with period <= 0 on clear / entering replay). Kept the
+        // name for the existing host shim; the arm is one-shot now, so a positive period just re-pulses.
         setSweep: function (map, periodSeconds) {
             currentMap = map;
-            const p = Number(periodSeconds);
-            if (!(p > 0)) { sweepPeriodMs = 0; removeSweepLayer(map); return; }
-            sweepPeriodMs = p * 1000;
-            sweepT0 = performance.now();        // this cycle starts now
-            ensureSweepLayer(map);              // no-op until the range is known (first frame)
-            if (!sweepRaf) sweepRaf = requestAnimationFrame(sweepFrame);
+            if (Number(periodSeconds) > 0) startSweepPulse(map);
+            else stopSweep(map);
         },
         // Switch rendered moment ('reflectivity' | 'velocity' | 'cc'). All geometries are already
         // decoded per frame, so this just re-uploads + repaints — no re-fetch/re-decode.
@@ -701,14 +738,14 @@
             hostLog('product=' + product);
             if (map && map.getLayer(LAYER_ID)) map.triggerRepaint();
         },
-        // Re-add after a basemap switch (setStyle drops custom layers + sources); frames, the range
-        // ring, and the sweep are retained, so restore them. The sweep's rAF keeps running and
-        // resumes drawing once its layer is back.
+        // Re-add after a basemap switch (setStyle drops custom layers + sources); frames + the range
+        // ring are retained, so restore them. If a sweep pulse is mid-flight, restore its layer too so
+        // the in-progress revolution keeps drawing.
         reAdd: function (map) {
             currentMap = map;
             if (currentFrame >= 0) addLayer(map);
             addRangeRing(map);
-            if (sweepPeriodMs > 0) ensureSweepLayer(map);
+            if (sweepRaf) ensureSweepLayer(map);
         },
         // Toggle inspect mode (read the value under the cursor). Attaches/detaches the mousemove
         // handlers + crosshair cursor and hides the tooltip / clears the host marker when off.

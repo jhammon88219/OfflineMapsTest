@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- TemporalToggles — the left section of the transport bar, anchored hard-left: square 2-state icon
+     toggle buttons that enable each temporal category's features on the map, grouped by category with
+     separators. PastCast is wired to the Past Event Viewer (Radar.IsPastEventMode); NowCast + ForeCast
+     are placeholders until their features are re-added. Enabling a category surfaces its options via a
+     context button on the right (see ContextBar). Icons are placeholders — to be sourced later. -->
+<UserControl
+    x:Class="OfflineMapsTest.Controls.Sections.TemporalToggles"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <UserControl.Resources>
+        <!-- Square 2-state toggle: fixed 40x40, icon centered, no min-size padding. -->
+        <Style x:Key="TemporalToggleStyle" TargetType="ToggleButton">
+            <Setter Property="Width" Value="40"/>
+            <Setter Property="Height" Value="40"/>
+            <Setter Property="MinWidth" Value="0"/>
+            <Setter Property="MinHeight" Value="0"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="CornerRadius" Value="6"/>
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="FontFamily" Value="Segoe Fluent Icons,Segoe MDL2 Assets"/>
+            <Setter Property="FontSize" Value="18"/>
+        </Style>
+        <Style x:Key="TemporalSeparatorStyle" TargetType="Border">
+            <Setter Property="Width" Value="0.5"/>
+            <Setter Property="Height" Value="26"/>
+            <Setter Property="Margin" Value="6,0"/>
+            <Setter Property="Background" Value="{ThemeResource CardStrokeColorDefaultBrush}"/>
+        </Style>
+    </UserControl.Resources>
+
+    <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+        <!-- PastCast -->
+        <ToggleButton Style="{StaticResource TemporalToggleStyle}" Content="&#xE81C;"
+                      ToolTipService.ToolTip="PastCast — replay a historical radar window"
+                      IsChecked="{x:Bind ViewModel.Radar.IsPastEventMode, Mode=TwoWay}"/>
+
+        <Border Style="{StaticResource TemporalSeparatorStyle}"/>
+
+        <!-- NowCast (placeholder) -->
+        <ToggleButton Style="{StaticResource TemporalToggleStyle}" Content="&#xE774;" IsEnabled="False"
+                      ToolTipService.ToolTip="NowCast — live radar / current conditions (coming soon)"/>
+
+        <Border Style="{StaticResource TemporalSeparatorStyle}"/>
+
+        <!-- ForeCast (placeholder) -->
+        <ToggleButton Style="{StaticResource TemporalToggleStyle}" Content="&#xE706;" IsEnabled="False"
+                      ToolTipService.ToolTip="ForeCast — SPC outlooks / forecasts (coming soon)"/>
+    </StackPanel>
+</UserControl>

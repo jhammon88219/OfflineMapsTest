@@ -81,11 +81,17 @@ namespace OfflineMapsTest.Services
 		Task SetSelectedRadarSiteAsync(string? siteId);
 
 		/// <summary>
-		/// Phase-locks the selected site's radar-sweep animation to the live-poll cycle: one full
-		/// revolution takes <paramref name="periodSeconds"/>, started now, so the arm completes as
-		/// the next radar update is due. A value &lt;= 0 returns the sweep to its free-running speed.
+		/// Stops/removes the selected site's radar sweep (call with <paramref name="periodSeconds"/>
+		/// &lt;= 0 on clear / entering replay). The sweep is a one-shot pulse now — see
+		/// <see cref="PulseRadarSweepAsync"/> to fire one on a new frame.
 		/// </summary>
 		Task SetRadarSweepAsync(double periodSeconds);
+
+		/// <summary>
+		/// Fires ONE radar-sweep pulse (arm + trailing afterglow, one revolution then hides) — called
+		/// when a genuinely-new frame lands, as a "fresh data arrived" cue. The range ring stays up.
+		/// </summary>
+		Task PulseRadarSweepAsync();
 
 		/// <summary>
 		/// Shows or hides all radar site marker buttons. Independent of the radar layer —
@@ -98,6 +104,13 @@ namespace OfflineMapsTest.Services
 		/// of site IDs; those markers render in the muted "offline" style.
 		/// </summary>
 		Task SetRadarSitesStatusAsync(string offlineIdsJson);
+
+		/// <summary>
+		/// Sets the accent color driving the "available" site-marker status halo, so it matches the
+		/// OS theme accent (like the OverlayBar's accent drop-shadow). <paramref name="borderColor"/>
+		/// is a CSS color for the ring; <paramref name="glowColor"/> a CSS color for its soft glow.
+		/// </summary>
+		Task SetRadarSiteAccentAsync(string borderColor, string glowColor);
 
 		/// <summary>Animates the map to the given center and zoom.</summary>
 		Task FlyToAsync(double longitude, double latitude, double zoom);

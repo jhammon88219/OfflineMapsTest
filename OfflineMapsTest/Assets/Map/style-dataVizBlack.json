@@ -12,7 +12,7 @@
       "id": "background",
       "type": "background",
       "paint": {
-        "background-color": "#333333"
+        "background-color": "#1C1C1C"
       }
     },
     {
@@ -26,7 +26,7 @@
       "source": "protomaps",
       "source-layer": "earth",
       "paint": {
-        "fill-color": "#141414"
+        "fill-color": "#000000"
       }
     },
     {
@@ -346,7 +346,7 @@
       "source": "protomaps",
       "source-layer": "water",
       "paint": {
-        "fill-color": "#333333"
+        "fill-color": "#1C1C1C"
       }
     },
     {

@@ -123,16 +123,28 @@ try {
 
     // Radar site marker buttons live in radar-sites.js — load once and delegate (passing the map).
     var RadarSites = null;
-    import('./radar-sites.js').then(function (m) { RadarSites = m; }).catch(function (e) { console.error('radar-sites.js load failed: ' + e); });
+    var pendingSiteAccent = null; // accent pushed before the module loaded (map-ready can beat the import)
+    import('./radar-sites.js').then(function (m) {
+        RadarSites = m;
+        if (pendingSiteAccent) { m.setAccent(pendingSiteAccent[0], pendingSiteAccent[1]); pendingSiteAccent = null; }
+    }).catch(function (e) { console.error('radar-sites.js load failed: ' + e); });
     window.showRadarSites = function (json) { if (RadarSites) RadarSites.show(map, json); };
     window.setSelectedRadarSite = function (id) { if (RadarSites) RadarSites.setSelected(id); };
     window.setRadarSitesStatus = function (json) { if (RadarSites) RadarSites.setStatus(json); };
     window.setRadarSitesVisible = function (visible) { if (RadarSites) RadarSites.setVisible(visible); };
+    // The OS theme accent for the site-status halo. Cache if the module hasn't loaded yet so the
+    // map-ready push (which can beat the dynamic import) isn't dropped.
+    window.setRadarSiteAccent = function (border, glow) {
+        if (RadarSites) RadarSites.setAccent(border, glow);
+        else pendingSiteAccent = [border, glow];
+    };
 
-    // Radar sweep timing. The host (C#) calls setRadarSweep(periodSeconds) at each live-poll cycle
-    // start; we delegate to the radar layer, which rotates the on-map sweep arm so one full
-    // revolution equals the time until the next update (phase-locked — the arm completes as new
-    // data is due). period <= 0 stops/removes the sweep. Same delegate pattern as the other shims.
+    // Radar sweep pulse. The host (C#) calls pulseRadarSweep() when a genuinely-new frame lands; we
+    // delegate to the radar layer, which runs ONE sweep revolution (arm + trailing afterglow) then
+    // hides the arm, leaving the range ring. setRadarSweep(period<=0) stops/removes it (clear/replay).
+    window.pulseRadarSweep = function () {
+        if (window.RadarLayer) window.RadarLayer.pulseSweep(map);
+    };
     window.setRadarSweep = function (periodSeconds) {
         if (window.RadarLayer) window.RadarLayer.setSweep(map, periodSeconds);
     };

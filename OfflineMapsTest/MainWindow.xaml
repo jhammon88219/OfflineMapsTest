@@ -17,46 +17,37 @@
     <!-- The map fills the whole window; UI (the transport bar) floats on top as an overlay, so
          showing/hiding the bar never changes the map's size. -->
     <Grid Background="#FF0A0A0A">
-        <!-- A "tool window" card style: a margin-separated, rounded, bordered card on the dock
-             backdrop. The border highlights to the system accent when the card holds focus (see
-             OnCardGotFocus). A matching caption-bar style sits at the top of each card. (Resources
-             live on the Grid — WinUI 3 Window has no Window.Resources.) -->
-        <Grid.Resources>
-            <Style x:Key="ToolCardStyle" TargetType="Border">
-                <Setter Property="Margin" Value="5"/>
-                <Setter Property="CornerRadius" Value="6"/>
-                <Setter Property="BorderThickness" Value="1"/>
-                <!-- Always-on, theme-aware base border. The "Solid" card stroke is opaque (vs the
-                     near-invisible low-alpha CardStrokeColorDefaultBrush), so every card reads as a
-                     bordered window at rest; OnCardGotFocus swaps the focused one to the accent. -->
-                <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultSolidBrush}"/>
-                <!-- Opaque (the station behind is transparent, so a low-alpha card fill like
-                     CardBackgroundFillColorDefaultBrush would let the map show through the cards). -->
-                <Setter Property="Background" Value="{ThemeResource SolidBackgroundFillColorBaseBrush}"/>
-            </Style>
-            <Style x:Key="ToolCaptionStyle" TargetType="Grid">
-                <Setter Property="Padding" Value="10,5"/>
-                <Setter Property="CornerRadius" Value="5,5,0,0"/>
-                <Setter Property="Background" Value="{ThemeResource SubtleFillColorSecondaryBrush}"/>
-                <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}"/>
-                <Setter Property="BorderThickness" Value="0,0,0,1"/>
-            </Style>
-        </Grid.Resources>
-
         <!-- Full-window map (bottom layer; all UI overlays float on top of it). -->
         <controls:WebView2 x:Name="MainMapWebView"/>
 
-        <!-- Transport bar: a chrome-only shell (Controls/TransportBar) that floats as a bottom
-             overlay; its content is composed here from section controls (each bound to the radar
-             view model). Add more sections by dropping them into this stack. -->
-        <ctl:TransportBar VerticalAlignment="Bottom">
-            <ctl:TransportBar.BarContent>
-                <StackPanel HorizontalAlignment="Center" Spacing="10">
-                    <sections:LoopControls ViewModel="{x:Bind ViewModel.Radar}"/>
-                    <sections:RadarProductControls ViewModel="{x:Bind ViewModel.Radar}"/>
-                </StackPanel>
-            </ctl:TransportBar.BarContent>
-        </ctl:TransportBar>
+        <!-- Overlay bar: a chrome-only shell (Controls/OverlayBar) that floats as a bottom
+             overlay. Its content is composed here in three zones — left: temporal-category toggles;
+             center: loop controls + product; right: contextual per-feature options buttons. -->
+        <ctl:OverlayBar VerticalAlignment="Bottom">
+            <ctl:OverlayBar.BarContent>
+                <!-- Single overlay cell: RadarControls STRETCHES to full bar width and centers its own
+                     dial at window-center (its internal symmetric star grid does the centering); the
+                     temporal toggles (far-left) and context options (far-right) float over the empty
+                     edges. Overlaying them — rather than giving them their own grid columns — means the
+                     dial's position is driven purely by RadarControls, so the edge sections can't shift
+                     it and the right-hand site-details can grow rightward into empty space without ever
+                     nudging the centered dial. -->
+                <Grid>
+                    <!-- Center: the merged radar transport + display controls (drives live AND replay). -->
+                    <sections:RadarControls HorizontalAlignment="Stretch"
+                                            VerticalAlignment="Center"
+                                            ViewModel="{x:Bind ViewModel.Radar}"/>
+                    <!-- Left: temporal-category enable toggles. -->
+                    <sections:TemporalToggles HorizontalAlignment="Left"
+                                              VerticalAlignment="Center"
+                                              ViewModel="{x:Bind ViewModel}"/>
+                    <!-- Right: contextual options for each enabled feature. -->
+                    <sections:ContextBar HorizontalAlignment="Right"
+                                         VerticalAlignment="Center"
+                                         ViewModel="{x:Bind ViewModel}"/>
+                </Grid>
+            </ctl:OverlayBar.BarContent>
+        </ctl:OverlayBar>
 
     </Grid>
 </Window>

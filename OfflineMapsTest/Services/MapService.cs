@@ -75,11 +75,17 @@ namespace OfflineMapsTest.Services
 		public Task SetRadarSweepAsync(double periodSeconds) =>
 			_mapView.RunScriptAsync(Call("setRadarSweep", periodSeconds));
 
+		public Task PulseRadarSweepAsync() =>
+			_mapView.RunScriptAsync(Call("pulseRadarSweep"));
+
 		public Task SetRadarSitesVisibleAsync(bool visible) =>
 			_mapView.RunScriptAsync(Call("setRadarSitesVisible", visible));
 
 		public Task SetRadarSitesStatusAsync(string offlineIdsJson) =>
 			_mapView.RunScriptAsync(Call("setRadarSitesStatus", offlineIdsJson));
+
+		public Task SetRadarSiteAccentAsync(string borderColor, string glowColor) =>
+			_mapView.RunScriptAsync(Call("setRadarSiteAccent", borderColor, glowColor));
 
 		public Task FlyToAsync(double longitude, double latitude, double zoom) =>
 			_mapView.RunScriptAsync(Call("flyTo", longitude, latitude, zoom));

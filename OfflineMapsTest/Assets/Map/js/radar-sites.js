@@ -88,9 +88,11 @@ function ensureStyle() {
             inset: -5px;
             border-radius: 9px;
             pointer-events: none;
-            /* available = green status halo */
-            border: 1.5px solid #57c75a;
-            box-shadow: 0 0 6px rgba(87, 199, 90, .55);
+            /* available = accent-colored status halo, driven by the OS theme accent the host pushes
+               via setAccent (--radar-site-halo / --radar-site-halo-glow). Falls back to green until
+               the host pushes (e.g. if the accent push hasn't arrived yet). */
+            border: 1.5px solid var(--radar-site-halo, #57c75a);
+            box-shadow: 0 0 6px var(--radar-site-halo-glow, rgba(87, 199, 90, .55));
             transition: border-color .15s ease, box-shadow .15s ease;
         }
         /* down = red halo */
@@ -156,6 +158,17 @@ export function setStatus(json) {
     try { radarSiteOffline = new Set((typeof json === 'string') ? JSON.parse(json) : json); }
     catch (e) { radarSiteOffline = new Set(); }
     Object.keys(radarMarkers).forEach(function (k) { applySiteStatus(radarMarkers[k], k); });
+}
+
+// Sets the accent color driving the "available" status halo (the ::after ring), pushed by the host
+// from the OS theme accent so it matches the OverlayBar's accent drop-shadow (and re-tints live when
+// the OS accent/theme changes). `border` is a CSS color for the ring; `glow` a CSS color for its soft
+// box-shadow. Set as CSS custom properties on the root, so they apply to all markers (present and
+// future) and the down/red + selected/none halos are unaffected. Empty args leave a value unchanged.
+export function setAccent(border, glow) {
+    const root = document.documentElement;
+    if (border) root.style.setProperty('--radar-site-halo', border);
+    if (glow) root.style.setProperty('--radar-site-halo-glow', glow);
 }
 
 // Show/hide all site buttons. Independent of the radar layer — an active loop keeps rendering while

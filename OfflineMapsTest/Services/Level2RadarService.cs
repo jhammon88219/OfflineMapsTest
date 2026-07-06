@@ -710,17 +710,32 @@ namespace OfflineMapsTest.Services
 			return keys;
 		}
 
+		// A site whose newest archive volume is older than this is treated as "down" (offline).
+		// This is measured against the ARCHIVE bucket, which itself lags real time by ~10 min (the
+		// reason the chunks bucket exists for the live frame). Stacked on a clear-air VCP's ~10-min
+		// volume cadence, a perfectly healthy quiet site's newest archive volume is routinely
+		// ~20-25 min old — so the threshold must clear that or clear-air sites false-flag as down
+		// (the KMQT/KIWA/KSGF/KINX-etc. false positives). 30 min gives headroom over the worst
+		// healthy case while still catching a genuine outage (which keeps climbing past it).
+		private static readonly TimeSpan LiveSiteStaleness = TimeSpan.FromMinutes(30);
+
 		public async Task<IReadOnlyCollection<string>> GetLiveSiteIdsAsync(CancellationToken cancellationToken = default)
 		{
 			var now = DateTimeOffset.UtcNow;
-			var live = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-			// today + yesterday so a site isn't falsely flagged offline in the first minutes of
-			// the UTC day (when today's prefix is still nearly empty for everyone).
+
+			// A site counts as "live" only if its NEWEST volume is recent (within LiveSiteStaleness).
+			// The old existence-only check (any data today OR yesterday) couldn't catch a site that
+			// produced data earlier in the UTC day and then went down — its folder still exists, so it
+			// stayed green for up to ~2 days (the KTLX-shows-green bug). So we (1) discover the candidate
+			// sites cheaply via the delimited day listing, then (2) probe each candidate's newest volume
+			// time and keep only the fresh ones.
+			var candidates = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+			// today + yesterday so a site isn't missed in the first minutes of the UTC day.
 			foreach (var day in new[] { now, now.AddDays(-1) })
 			{
 				try
 				{
-					await AddSitesForDayAsync(day, live, cancellationToken);
+					await AddSitesForDayAsync(day, candidates, cancellationToken);
 				}
 				catch (OperationCanceledException)
 				{
@@ -728,10 +743,99 @@ namespace OfflineMapsTest.Services
 				}
 				catch
 				{
-					// Best effort: a failed listing just leaves those sites unflagged.
+					// Best effort: a failed listing just leaves those sites out of the candidate set.
 				}
 			}
+
+			// Probe each candidate's newest volume time with bounded concurrency; a stale newest means
+			// the site stopped transmitting = "down". (Sites absent from the candidate set are down
+			// already and need no probe.)
+			var live = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+			using var gate = new SemaphoreSlim(10);
+			var probes = candidates.Select(async id =>
+			{
+				await gate.WaitAsync(cancellationToken);
+				bool fresh;
+				try
+				{
+					var newest = await NewestArchiveVolumeTimeAsync(id, now, cancellationToken);
+					fresh = newest is { } t && now - t <= LiveSiteStaleness;
+				}
+				catch (OperationCanceledException)
+				{
+					throw;
+				}
+				catch
+				{
+					// Best effort: a transient probe failure errs toward "available" so a network blip
+					// doesn't falsely flag a healthy site as down.
+					fresh = true;
+				}
+				finally
+				{
+					gate.Release();
+				}
+
+				if (fresh)
+				{
+					lock (live)
+					{
+						live.Add(id);
+					}
+				}
+			});
+			await Task.WhenAll(probes);
 			return live;
+		}
+
+		// Newest archive volume time for a site: the last (chronologically) volume key today, or —
+		// only when today has nothing yet (just after UTC midnight, or a site down since before it) —
+		// yesterday's newest. Volume keys sort lexically == chronologically (the timestamp is embedded
+		// in the name), so the max parsed time wins. One listing per site in the common case.
+		private async Task<DateTimeOffset?> NewestArchiveVolumeTimeAsync(string siteId, DateTimeOffset now, CancellationToken ct)
+		{
+			var newest = NewestOf(await KeysForDayAsync(siteId, now, ct));
+			if (newest is null)
+			{
+				newest = NewestOf(await KeysForDayAsync(siteId, now.AddDays(-1), ct));
+			}
+			return newest;
+
+			static DateTimeOffset? NewestOf(List<string> keys)
+			{
+				DateTimeOffset? max = null;
+				foreach (var k in keys)
+				{
+					var t = ParseVolumeTime(k);
+					if (t is { } v && (max is null || v > max))
+					{
+						max = v;
+					}
+				}
+				return max;
+			}
+		}
+
+		public async Task<IReadOnlyCollection<string>> GetSiteIdsForDateAsync(DateTimeOffset startUtc, DateTimeOffset endUtc, CancellationToken cancellationToken = default)
+		{
+			var sites = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+			// The window spans at most a couple of UTC days; list each day's site folders.
+			for (var day = startUtc.UtcDateTime.Date; day <= endUtc.UtcDateTime.Date; day = day.AddDays(1))
+			{
+				try
+				{
+					await AddSitesForDayAsync(new DateTimeOffset(day, TimeSpan.Zero), sites, cancellationToken);
+				}
+				catch (OperationCanceledException)
+				{
+					throw;
+				}
+				catch
+				{
+					// Best effort: a failed listing just leaves those sites unflagged (shown available).
+				}
+			}
+			return sites;
 		}
 
 		// Adds every site that has any data under <y>/<m>/<d>/ to the set, via a single

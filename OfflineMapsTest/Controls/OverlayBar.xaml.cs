@@ -10,12 +10,14 @@ using Windows.UI.ViewManagement;
 namespace OfflineMapsTest.Controls
 {
 	/// <summary>
-	/// Chrome-only shell for the bottom transport bar: the centered show/hide pull-tab, the accent
+	/// Chrome-only shell for the bottom overlay bar: the centered show/hide pull-tab, the accent
 	/// drop shadow, the theme-aware surface, and the bottom-overlay collapse behavior. The host fills
 	/// <see cref="BarContent"/> with the actual controls, so section content is composed in MainWindow.
 	/// The show/hide state is pure view state and lives here, not on a view model.
+	/// (Named for what it is — a bottom overlay shell — not for what it hosts; the round play/scrub
+	/// control it contains is the actual "transport control", <see cref="RadialTransport"/>.)
 	/// </summary>
-	public sealed partial class TransportBar : UserControl
+	public sealed partial class OverlayBar : UserControl
 	{
 		// Soft accent glows behind the bar and the tab, drawn into one container visual hosted by
 		// ShadowHost (which sits below the tab in z-order, so no glow ever crosses in front of it).
@@ -29,7 +31,7 @@ namespace OfflineMapsTest.Controls
 		// Kept as a field so the subscription isn't garbage-collected.
 		private readonly UISettings _uiSettings = new();
 
-		public TransportBar()
+		public OverlayBar()
 		{
 			InitializeComponent();
 			Loaded += OnLoaded;
@@ -46,17 +48,17 @@ namespace OfflineMapsTest.Controls
 		}
 
 		public static readonly DependencyProperty BarContentProperty =
-			DependencyProperty.Register(nameof(BarContent), typeof(object), typeof(TransportBar), new PropertyMetadata(null));
+			DependencyProperty.Register(nameof(BarContent), typeof(object), typeof(OverlayBar), new PropertyMetadata(null));
 
 		/// <summary>Whether the bar is shown (the pull-tab toggles it). Pure view state.</summary>
-		public bool IsTransportBarVisible
+		public bool IsOverlayBarVisible
 		{
-			get => (bool)GetValue(IsTransportBarVisibleProperty);
-			set => SetValue(IsTransportBarVisibleProperty, value);
+			get => (bool)GetValue(IsOverlayBarVisibleProperty);
+			set => SetValue(IsOverlayBarVisibleProperty, value);
 		}
 
-		public static readonly DependencyProperty IsTransportBarVisibleProperty =
-			DependencyProperty.Register(nameof(IsTransportBarVisible), typeof(bool), typeof(TransportBar), new PropertyMetadata(true));
+		public static readonly DependencyProperty IsOverlayBarVisibleProperty =
+			DependencyProperty.Register(nameof(IsOverlayBarVisible), typeof(bool), typeof(OverlayBar), new PropertyMetadata(true));
 
 		// x:Bind function mapping a bool to Visibility (no value-converter lookup needed).
 		public Visibility VisibleWhen(bool value) =>
@@ -68,8 +70,8 @@ namespace OfflineMapsTest.Controls
 
 		public string ToggleLabel(bool visible) => visible ? "Hide" : "Show";
 
-		private void OnToggleTransportBarClick(object sender, RoutedEventArgs e) =>
-			IsTransportBarVisible = !IsTransportBarVisible;
+		private void OnToggleOverlayBarClick(object sender, RoutedEventArgs e) =>
+			IsOverlayBarVisible = !IsOverlayBarVisible;
 
 		private void OnLoaded(object sender, RoutedEventArgs e) => EnsureShadow();
 
