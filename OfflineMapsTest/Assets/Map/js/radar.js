@@ -34,7 +34,112 @@
     // currentFrame is the index being rendered.
     let frames = [];
     let currentFrame = -1;
+
+    // ---- Decoded-frame cache (instant site revisits / replay toggles) ----
+    // Decoding a volume (bzip2 + gate geometry + dealias) is the expensive part of a site load, and
+    // beginLoop() wipes frames[] on every (re)selection — so revisiting a site, or toggling replay,
+    // used to re-fetch + re-decode volumes we'd just built. This keeps the decoded result keyed by its
+    // stable volume URL (radarlevel2/{site}_{yyyyMMdd_HHmmss}.V06 — deterministic per volume), so a
+    // revisit reuses the geometry SYNCHRONOUSLY on the main thread (no fetch, no worker decode). The
+    // geometry is immutable, so sharing the typed arrays between the cache and frames[] is safe; LRU-
+    // capped to bound memory (the cached res also carries the inspector value-grids, so inspect stays
+    // instant on revisit too). Survives beginLoop/clear on purpose — only the cap evicts.
+    const decodedCache = new Map(); // url -> stored applyFrameResult-shaped result (arrays shared with frames[])
+    const DECODE_CACHE_MAX = 96;    // ~a handful of sites' worth of loop frames; tune down if memory bites
+    function cacheGet(url) {
+        if (!url) return null;
+        const v = decodedCache.get(url);
+        if (v) { decodedCache.delete(url); decodedCache.set(url, v); } // re-insert = move to most-recently-used
+        return v || null;
+    }
+    function cachePut(url, res) {
+        if (!url || res.empty || res.error) return; // don't cache empties/failures — let them re-fetch
+        decodedCache.delete(url);
+        decodedCache.set(url, res);
+        while (decodedCache.size > DECODE_CACHE_MAX) decodedCache.delete(decodedCache.keys().next().value);
+    }
+
+    // ---- Lazy-upgrade queue (bounded, current-frame-first) ----
+    // Switching to Velocity (or turning Inspect on) needs the loaded frames re-decoded to add the
+    // geometry they were built without (velocity/dealias, or the inspector grids). Firing all of them
+    // at once floods the decode pool — on big dual-pol volumes (10-44 MB) the re-decodes can't keep up
+    // and frames flash blank as playback runs over them. Instead we QUEUE the upgrades and run at most
+    // UPGRADE_CONCURRENCY at a time, always picking the frame nearest the one on screen (preferring the
+    // forward/playback direction), so velocity/grids fill in around what the user is watching. Re-pumped
+    // as each upgrade finishes; the queue re-checks need at pump time, so a product switch mid-flight
+    // just drains harmlessly. State is reset whenever the loop generation changes (beginLoop/remap/clear).
+    var upgradeQueue = [];        // frame indices wanting an upgrade decode, not yet started
+    var upgradeInFlight = {};     // idx -> true while its upgrade decode is outstanding
+    var upgradeInFlightN = 0;
+    var pumpingUpgrades = false;  // re-entrancy guard (a cache-hit upgrade completes synchronously)
+    var UPGRADE_CONCURRENCY = 3;  // leave a worker free of the pool (size 4) for the current frame / loads
+    function resetUpgrades() { upgradeQueue = []; upgradeInFlight = {}; upgradeInFlightN = 0; }
+    function needsUpgrade(idx) {
+        var f = frames[idx];
+        if (!f || !f.url) return false;
+        if ((product === 'velocity' || velPrefetch) && !f.velBuilt) return true; // Velocity active OR speculatively prefetching it
+        if (inspecting && !f.gridsBuilt) return true;             // no value grids, Inspect on
+        return false;
+    }
+    function upgradePriority(idx) {
+        if (currentFrame < 0) return idx;
+        if (idx >= currentFrame) return idx - currentFrame;       // current (0) + ahead, in play order
+        return (currentFrame - idx) + frames.length;              // behind the playhead: lowest priority
+    }
+    function queueUpgrade(idx) {
+        if (!needsUpgrade(idx) || upgradeInFlight[idx]) return;
+        if (upgradeQueue.indexOf(idx) < 0) upgradeQueue.push(idx);
+        pumpUpgrades();
+    }
+    function queueAllUpgrades() { for (var i = 0; i < frames.length; i++) queueUpgrade(i); }
+    function pumpUpgrades() {
+        if (pumpingUpgrades) return; // a sync completion re-entered us; the outer loop keeps draining
+        pumpingUpgrades = true;
+        try {
+            while (upgradeInFlightN < UPGRADE_CONCURRENCY && upgradeQueue.length) {
+                var bestPos = -1, bestPri = Infinity;
+                for (var p = 0; p < upgradeQueue.length; p++) {
+                    var idx = upgradeQueue[p];
+                    if (!needsUpgrade(idx)) continue;             // stale (already built / product changed)
+                    var pri = upgradePriority(idx);
+                    if (pri < bestPri) { bestPri = pri; bestPos = p; }
+                }
+                if (bestPos < 0) { upgradeQueue = upgradeQueue.filter(needsUpgrade); break; }
+                var chosen = upgradeQueue.splice(bestPos, 1)[0];
+                upgradeInFlight[chosen] = true;
+                upgradeInFlightN++;
+                decodeFrame(frames[chosen].url, chosen); // async, or sync on a cache hit (re-enters pump)
+            }
+        } finally {
+            pumpingUpgrades = false;
+        }
+    }
+    function upgradeDone(idx) { // an upgrade decode for idx settled (ok or error) — free its slot, pump next
+        if (!upgradeInFlight[idx]) return;
+        delete upgradeInFlight[idx];
+        upgradeInFlightN--;
+        pumpUpgrades();
+    }
+    // Tell the host how much of the loop is ready for the ACTIVE product, so the UI can show a
+    // "Building velocity N/M" readout and playback can hold at the built frontier instead of stuttering
+    // into a frame whose velocity is still being dealiased (~1.5 s each on big super-res volumes). Only
+    // Velocity is lazily built; reflectivity/CC are always present, so for them every frame reads ready.
+    function postBuildProgress() {
+        var total = frames.length;
+        if (!total) { post({ type: 'radarBuildProgress', product: product, built: 0, total: 0, ready: [] }); return; }
+        var built = 0, ready = new Array(total);
+        for (var i = 0; i < total; i++) {
+            var r = (product !== 'velocity') || !!(frames[i] && frames[i].velBuilt);
+            ready[i] = r;
+            if (r) built++;
+        }
+        post({ type: 'radarBuildProgress', product: product, built: built, total: total, ready: ready });
+    }
+
     let product = 'reflectivity'; // 'reflectivity' | 'velocity' — which moment to render
+    let velPrefetch = false; // speculatively build velocity for every frame even when it's NOT the active
+                             // product — armed by the host (prefetchVelocity) once reflectivity has
+                             // rendered, so switching to Velocity is instant. Reset per new loop.
     let pendingFrame = -1;  // a frame requested via showFrame before it finished decoding; the
                             // decode that satisfies it promotes it to currentFrame (so showFrame
                             // never pins currentFrame to an undecoded index and blanks the layer).
@@ -123,20 +228,36 @@
         } catch (e) { /* ignore */ }
     }
 
-    // ---- Off-thread decode via Web Worker ----
-    let worker; // undefined = not tried, Worker = ready, null = unavailable
+    // ---- Off-thread decode via a Web Worker POOL ----
+    // A single worker decodes its message queue serially, so the backfill was decode-bound (one frame
+    // at a time). A pool of N workers decodes N frames in parallel across cores; round-robin dispatch.
+    // Results carry {token,index} and applyFrameResult runs serially on the main thread, so out-of-order
+    // completions across workers are safe. Pool persists for the app lifetime (creating workers is
+    // expensive); each loads radar-decode.js + the vendored decoder independently (~a few MB each).
+    const DECODE_POOL_SIZE = Math.max(1, Math.min(4,
+        (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) ? navigator.hardwareConcurrency - 1 : 3));
+    let workerPool; // undefined = not tried, array = ready, null = Worker API unavailable
+    let workerRR = 0;
     function getWorker() {
-        if (worker === undefined) {
+        if (workerPool === undefined) {
             try {
-                worker = new Worker(new URL('radar-worker.js', SELF_SCRIPT).href);
-                worker.onmessage = function (e) { applyFrameResult(e.data); };
-                worker.onerror = function (e) { hostLog('worker error: ' + (e && e.message ? e.message : e)); };
+                workerPool = [];
+                for (let i = 0; i < DECODE_POOL_SIZE; i++) {
+                    const w = new Worker(new URL('radar-worker.js', SELF_SCRIPT).href);
+                    w.onmessage = function (e) { applyFrameResult(e.data); };
+                    w.onerror = function (e) { hostLog('worker error: ' + (e && e.message ? e.message : e)); };
+                    workerPool.push(w);
+                }
+                hostLog('decode pool size=' + workerPool.length);
             } catch (e) {
-                worker = null;
+                workerPool = null; // fall back to main-thread decode
                 hostLog('worker unavailable; main-thread decode: ' + (e && e.message ? e.message : e));
             }
         }
-        return worker;
+        if (!workerPool || !workerPool.length) return null;
+        const w = workerPool[workerRR % workerPool.length]; // round-robin next worker
+        workerRR++;
+        return w;
     }
 
     // Flattens a decode result (r2 from decodeAndBuild / decodeDowFrame: { geom, velGeom, ccGeom,
@@ -144,9 +265,9 @@
     // decode fallback and the DOW path. NOTE: the Worker (radar-worker.js) builds this same shape itself
     // rather than calling here, because it must pass the typed-array buffers as postMessage transferables
     // — a worker-only concern, and the worker can't reach this IIFE-private helper anyway.
-    function frameResultFrom(r2, token, index) {
+    function frameResultFrom(r2, token, index, url, velBuilt, gridsBuilt) {
         return {
-            token: token, index: index, empty: !r2.geom && !r2.velGeom && !r2.ccGeom,
+            token: token, index: index, url: url, velBuilt: velBuilt, gridsBuilt: gridsBuilt, empty: !r2.geom && !r2.velGeom && !r2.ccGeom,
             positions: r2.geom && r2.geom.positions, colors: r2.geom && r2.geom.colors, count: r2.geom && r2.geom.count,
             velPositions: r2.velGeom && r2.velGeom.positions, velColors: r2.velGeom && r2.velGeom.colors, velCount: r2.velGeom && r2.velGeom.count,
             ccPositions: r2.ccGeom && r2.ccGeom.positions, ccColors: r2.ccGeom && r2.ccGeom.colors, ccCount: r2.ccGeom && r2.ccGeom.count,
@@ -160,6 +281,7 @@
     function applyFrameResult(res) {
         if (!res || res.token !== loopToken) return; // stale (loop changed)
         if (res.error) {
+            upgradeDone(res.index); // free the upgrade slot (if this was one); don't retry a failing frame
             hostLog('frame ' + res.index + ' decode failed: ' + res.error);
             post({ type: 'radarFrameReady', index: res.index, hasData: false });
             return;
@@ -171,12 +293,30 @@
             // Inspector value grids (keyed by product name) — see setInspect / lookupValue below.
             grids: { reflectivity: res.reflGrid || null, velocity: res.velGrid || null, cc: res.ccGrid || null },
             velNyq: res.velNyq || 0, // Nyquist (m/s) — lets the inspector show the raw fold of a dealiased gate
+            // Lazy-build bookkeeping: url = this frame's stable volume URL (so a product/inspect switch
+            // can re-decode it), velBuilt = whether velocity geometry was built, gridsBuilt = whether the
+            // inspector value grids were built (both skipped by default; built on demand — see setProduct
+            // / setInspect).
+            url: res.url || null, velBuilt: !!res.velBuilt, gridsBuilt: !!res.gridsBuilt,
         };
         // Post the per-frame decode metrics as a STRUCTURED message (the C# RadarDiagnostics
         // service records them, evaluates the suspect heuristics, and quarantines a bad frame's
         // .V06). The metrics are already computed by the decoder; we just forward them losslessly.
+        // Retain the decoded result for instant reuse on a site revisit / replay toggle (keyed by its
+        // stable volume URL). Shares the typed arrays with frames[res.index] — safe, geometry is read-only.
+        cachePut(res.url, res);
+        upgradeDone(res.index); // if this arrival was a queued upgrade, free its slot + pump the next
+        // Reconcile this just-arrived frame with the ACTIVE product/inspect state. It may have been
+        // decoded WITHOUT the geometry the current view needs — refl-only while the user is on Velocity,
+        // or without inspector grids while Inspect is on — because the product/Inspect was switched
+        // mid-load, AFTER this frame's decode was posted but BEFORE it arrived, so the switch's queue
+        // sweep couldn't see it yet (it wasn't in frames[] then). That race left a scattered set of
+        // frames stuck refl-only on a slow past-event load (the "switch to Velocity shows nothing until I
+        // reload" bug). Queue it for a bounded upgrade; needsUpgrade returns false once built, so there's
+        // no decode loop and no cost when the product was already active at decode time.
+        queueUpgrade(res.index);
         post({
-            type: 'radarFrame', index: res.index, empty: !!res.empty,
+            type: 'radarFrame', index: res.index, empty: !!res.empty, cached: !!res.cached,
             tris: res.count || 0, velTris: res.velCount || 0,
             decodeMs: res.decodeMs, buildMs: res.buildMs, bytes: res.bytes,
             elevList: res.elevList, velElev: res.velElev, velNyq: res.velNyq,
@@ -210,6 +350,7 @@
             if (res.rangeMeters > 0) setRangeRing(currentMap, res.rangeMeters);
         }
         post({ type: 'radarFrameReady', index: res.index, hasData: !res.empty });
+        postBuildProgress(); // this frame's build state may have changed the ready count
     }
 
     // ---- GL custom layer ----
@@ -445,6 +586,22 @@
     // Decodes one volume into frames[index] (off-thread, with a main-thread fallback).
     function decodeFrame(url, index) {
         const myToken = loopToken;
+        // Velocity is the only product that must dealias (expensive), so build it when it's the active
+        // product OR while speculatively prefetching it (velPrefetch — armed by the host once the
+        // reflectivity loop has rendered, so a later switch to Velocity is instant/near-instant). On
+        // reflectivity/CC with prefetch off we skip it and re-decode on demand (setProduct).
+        const wantVel = (product === 'velocity') || velPrefetch; // build velocity when active OR prefetching it in the background
+        const wantGrids = inspecting; // inspector value grids are only needed while Inspect is on
+        // Cache hit → reuse the decoded geometry synchronously (no fetch, no worker). This is what
+        // makes a site revisit / replay toggle instant. Reject a hit that lacks a piece we need now —
+        // velocity (a refl-only decode from a prior view) or the inspector grids (decoded with Inspect
+        // off) — so we fall through and build it this time. Clone with THIS load's token+index; arrays shared.
+        const hit = cacheGet(url);
+        if (hit && (!wantVel || hit.velBuilt) && (!wantGrids || hit.gridsBuilt)) {
+            hostLog('frame ' + index + ' cache hit');
+            applyFrameResult(Object.assign({}, hit, { token: myToken, index: index, cached: true }));
+            return;
+        }
         fetch(url, { cache: 'no-store' }).then(function (r) {
             if (!r.ok) throw new Error('HTTP ' + r.status);
             return r.arrayBuffer();
@@ -452,17 +609,18 @@
             if (myToken !== loopToken) return;
             const w = getWorker();
             if (w) {
-                w.postMessage({ ab: ab, siteLat: siteLat, siteLon: siteLon, minDbz: MIN_DBZ, token: myToken, index: index }, [ab]);
+                w.postMessage({ ab: ab, siteLat: siteLat, siteLon: siteLon, minDbz: MIN_DBZ, token: myToken, index: index, url: url, buildVel: wantVel, buildGrids: wantGrids }, [ab]);
             } else {
                 import('./radar-decode.js').then(function (m) {
-                    return m.decodeAndBuild(ab, siteLat, siteLon, MIN_DBZ);
+                    return m.decodeAndBuild(ab, siteLat, siteLon, MIN_DBZ, wantVel, wantGrids);
                 }).then(function (r2) {
-                    applyFrameResult(frameResultFrom(r2, myToken, index));
+                    applyFrameResult(frameResultFrom(r2, myToken, index, url, wantVel, wantGrids));
                 }).catch(function (err) {
                     applyFrameResult({ token: myToken, index: index, error: String(err && err.message ? err.message : err) });
                 });
             }
         }).catch(function (err) {
+            upgradeDone(index); // this path skips applyFrameResult — free the upgrade slot so the pump doesn't stall
             hostLog('frame ' + index + ' fetch failed: ' + (err && err.message ? err.message : err));
             post({ type: 'radarFrameReady', index: index, hasData: false });
         });
@@ -501,7 +659,7 @@
     // Reads the moment value at a geographic point from a polar value grid, or null (no data /
     // out of range). Mirrors buildGates' projection: x∝sin(az), y∝cos(az), az from north clockwise.
     function lookupValue(grid, lat, lng) {
-        if (!grid || !Geo) return null;
+        if (!grid || !grid.values || !Geo) return null; // values null = grid was built metadata-only (Inspect was off)
         const polar = Geo.lngLatToPolar(siteLat, siteLon, lng, lat);
         const rangeKm = polar.rangeMeters / 1000, azDeg = polar.azDeg;
         const j = Math.floor((rangeKm - grid.firstGate) / grid.gateSize);
@@ -596,6 +754,8 @@
             }
             siteLat = lat; siteLon = lon;
             loopToken++;            // invalidate any in-flight frames from a previous loop
+            resetUpgrades();        // and drop any pending/in-flight lazy-upgrade decodes from it
+            velPrefetch = false;    // new site: build reflectivity first; the host re-arms velocity prefetch once it's ready
             frames = [];
             currentFrame = -1;
             pendingFrame = -1;
@@ -635,6 +795,7 @@
             try { mapping = JSON.parse(mappingJson); } catch (e) { hostLog('remap parse failed: ' + (e && e.message ? e.message : e)); return; }
             // New loop generation: drop any in-flight decode still targeting an OLD index.
             loopToken++;
+            resetUpgrades(); // stale upgrades target old indices; re-queued below against the new frames[]
             var oldCurrent = currentFrame, oldUploaded = uploadedFrame;
             var nf = new Array(newCount);
             var newCurrent = -1;
@@ -659,10 +820,12 @@
                 uploadedFrame = -1;
                 showCurrent(map, 'remap-fallback');
             }
+            queueAllUpgrades(); // a reused refl-only frame still needs velocity if Velocity is active
             hostLog('remap newCount=' + newCount + ' cf=' + currentFrame + ' reused=' + frames.filter(Boolean).length + ' token=' + loopToken);
         },
         clear: function (map) {
             loopToken++;
+            resetUpgrades();
             frames = [];
             currentFrame = -1;
             pendingFrame = -1;
@@ -670,6 +833,7 @@
             removeRangeRing(map);
             stopSweep(map);
             currentRangeMeters = 0;
+            postBuildProgress(); // frames=[] -> 0/0 clears the "building" readout
             hostLog('clear token=' + loopToken);
         },
         // DOW Event Viewer: show a single curated mobile-radar frame (the "dow-frame/1" JSON from
@@ -680,6 +844,7 @@
             currentMap = map;
             attachContextListeners(map);
             loopToken++;
+            resetUpgrades();
             const myToken = loopToken;
             frames = [];
             currentFrame = -1;
@@ -707,8 +872,9 @@
             }).then(function (r2) {
                 if (!r2 || myToken !== loopToken) return;
                 // Feed it as frame 0 — applyFrameResult adopts the first frame (currentFrame<0),
-                // (re)adds the layer, and draws the range ring from r2.rangeMeters.
-                applyFrameResult(frameResultFrom(r2, myToken, 0));
+                // (re)adds the layer, and draws the range ring from r2.rangeMeters. DOW always builds
+                // velocity (pre-dealiased, cheap) + grids so velBuilt/gridsBuilt=true; url undefined = not cached.
+                applyFrameResult(frameResultFrom(r2, myToken, 0, undefined, true, true));
             }).catch(function (err) {
                 hostLog('showDow failed: ' + (err && err.message ? err.message : err));
             });
@@ -729,14 +895,30 @@
             if (Number(periodSeconds) > 0) startSweepPulse(map);
             else stopSweep(map);
         },
-        // Switch rendered moment ('reflectivity' | 'velocity' | 'cc'). All geometries are already
-        // decoded per frame, so this just re-uploads + repaints — no re-fetch/re-decode.
+        // Switch rendered moment ('reflectivity' | 'velocity' | 'cc'). Reflectivity + CC geometry is
+        // always built, so those switch instantly. Velocity is built lazily (it's the one product that
+        // must dealias), so switching TO Velocity queues the loaded refl-only frames for a BOUNDED,
+        // current-frame-first re-decode (see the upgrade queue up top) — velocity fills in around the
+        // frame on screen instead of flooding the decode pool and flashing blanks during playback.
         setProduct: function (map, p) {
             if ((p !== 'reflectivity' && p !== 'velocity' && p !== 'cc') || p === product) return;
             product = p;
             uploadedFrame = -1; // force the new product's geometry to upload on the next render
             hostLog('product=' + product);
+            queueAllUpgrades(); // no-op unless Velocity (or Inspect) needs geometry these frames lack
+            postBuildProgress(); // switching to Velocity: report the (mostly not-yet-built) ready set now
             if (map && map.getLayer(LAYER_ID)) map.triggerRepaint();
+        },
+        // Speculatively build Velocity geometry for the whole loop IN THE BACKGROUND, before the user
+        // selects the Velocity product — armed by the host once reflectivity has finished rendering, so a
+        // later switch to Velocity is instant (or nearly so). Reuses the SAME bounded, current-frame-first
+        // upgrade queue as an on-demand switch, just started early and at low urgency; velPrefetch persists
+        // so frames added later (live poll, incremental reload) get their velocity built too. Idempotent,
+        // and a no-op cost-wise once every frame is built (needsUpgrade returns false).
+        prefetchVelocity: function () {
+            if (velPrefetch) return;
+            velPrefetch = true;
+            queueAllUpgrades();
         },
         // Re-add after a basemap switch (setStyle drops custom layers + sources); frames + the range
         // ring are retained, so restore them. If a sweep pulse is mid-flight, restore its layer too so
@@ -757,6 +939,10 @@
                 if (!inspectMove) { inspectMove = onInspectMove; map.on('mousemove', inspectMove); }
                 if (!inspectOut) { inspectOut = onInspectOut; map.on('mouseout', inspectOut); }
                 if (canvas) canvas.style.cursor = 'crosshair';
+                // Value grids are skipped by default (memory). Turning Inspect ON now builds them on
+                // demand for the loaded frames via the bounded, current-frame-first upgrade queue — so
+                // lookups become available around the frame on screen first, without flooding the pool.
+                queueAllUpgrades();
             } else {
                 if (inspectMove) { map.off('mousemove', inspectMove); inspectMove = null; }
                 if (inspectOut) { map.off('mouseout', inspectOut); inspectOut = null; }

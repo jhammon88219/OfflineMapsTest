@@ -58,9 +58,45 @@ namespace OfflineMapsTest.ViewModels
 		private int _loopLengthIndex = 1; // default 10 frames
 		private int LoopLength => LoopLengthByIndex[Math.Clamp(_loopLengthIndex, 0, LoopLengthByIndex.Length - 1)];
 		private DateTimeOffset?[] _frameTimes = Array.Empty<DateTimeOffset?>();
+		// Per-frame scan mode ("VCP 212 · precip"), parallel to _frameTimes. Populated for every
+		// frame (archive via EnsureCachedAsync, live via the poll) but only SHOWN in replay, where
+		// there's no live poll to drive the single _liveModeText. null = unknown for that frame.
+		private string?[] _frameModes = Array.Empty<string?>();
 		private int _frameCount;
 		private int _readyCount;
 		private int _currentFrameIndex;
+
+		/// <summary>One cell per loop frame for the segmented scrubber; each <see cref="RadarFrameSegment.IsReady"/>
+		/// flips true as that frame decodes (see <see cref="OnRadarFrameReady"/>). Rebuilt on every (re)load
+		/// via <see cref="RebuildSegments"/>. The scrubber cells + playhead render from this.</summary>
+		public System.Collections.ObjectModel.ObservableCollection<RadarFrameSegment> Segments { get; } = new();
+
+		// Rebuilds Segments to `count` cells (a new loop / a remap). `readyFrom` optionally carries the
+		// DECODE state to seed each new index (used by the incremental remap to keep reused frames lit);
+		// null seeds all not-decoded. Each cell's displayed readiness is then derived for the active
+		// product. Runs on the UI thread (load/remap resume there).
+		private void RebuildSegments(int count, bool[]? readyFrom = null)
+		{
+			Segments.Clear();
+			for (var i = 0; i < count; i++)
+			{
+				Segments.Add(new RadarFrameSegment { IsDecoded = readyFrom is { } r && i < r.Length && r[i] });
+			}
+			RefreshSegmentReadiness();
+		}
+
+		// Recomputes every scrubber cell's DISPLAYED readiness (RadarFrameSegment.IsReady) from its durable
+		// decode state and the active product: Reflectivity/CC are ready as soon as decoded; Velocity also
+		// needs its (lazily-built) dealiased geometry, so a decoded-but-not-yet-dealiased frame reads as
+		// still-loading — this is what makes the scrubber FILL IN while velocity builds, exactly like the
+		// initial decode. Called whenever decode state, velocity-build state, or the product changes.
+		private void RefreshSegmentReadiness()
+		{
+			for (var i = 0; i < Segments.Count; i++)
+			{
+				Segments[i].IsReady = Segments[i].IsDecoded && IsFrameDisplayReady(i);
+			}
+		}
 		private bool _isPlaying;
 		private bool _isLoopReady;
 		private string? _loadedNewestKey;
@@ -443,6 +479,15 @@ namespace OfflineMapsTest.ViewModels
 				_isLoopReady = value;
 				OnPropertyChanged();
 				OnPropertyChanged(nameof(RadarLoadingText));
+
+				// Reflectivity has finished rendering: speculatively build Velocity in the background so a
+				// later switch to it is instant. Only on the false→true transition (once per load — the
+				// flag is reset at each loop begin), and only for a real loop. Cheap if the user is already
+				// on Velocity (frames are already building) — the JS side is idempotent.
+				if (value && _frameCount > 0)
+				{
+					_ = _mapService.PrefetchRadarVelocityAsync();
+				}
 			}
 		}
 
@@ -476,16 +521,12 @@ namespace OfflineMapsTest.ViewModels
 			}
 		}
 
-		/// <summary>Label for the current frame: the volume's local time, or load progress.</summary>
+		/// <summary>The displayed frame's local time (shown beside the transport). Empty until that frame's
+		/// time is known — load progress is conveyed by the segmented scrubber now, not text.</summary>
 		public string CurrentFrameTimeText
 		{
 			get
 			{
-				if (!_isLoopReady)
-				{
-					return _frameCount > 0 ? $"Loading {_readyCount}/{_frameCount}…" : "";
-				}
-
 				var t = (_currentFrameIndex >= 0 && _currentFrameIndex < _frameTimes.Length)
 					? _frameTimes[_currentFrameIndex]
 					: null;
@@ -532,6 +573,25 @@ namespace OfflineMapsTest.ViewModels
 			CurrentFrameIndex = MaxFrameIndex; // snap back to the latest frame
 		}
 
+		/// <summary>Steps the shown frame by <paramref name="delta"/> (−1 = previous, +1 = next). Pauses
+		/// playback so the step sticks (stepping is a manual seek), and keeps the loop engaged so Stop stays
+		/// available. No-op until the loop is fully loaded. The CurrentFrameIndex setter clamps at the ends.</summary>
+		public void StepFrame(int delta)
+		{
+			if (!_isLoopReady)
+			{
+				return;
+			}
+
+			if (_isPlaying)
+			{
+				IsPlaying = false; // pause in place so the manual step isn't immediately overwritten
+			}
+
+			SetLoopEngaged(true);
+			CurrentFrameIndex = _currentFrameIndex + delta;
+		}
+
 		/// <summary>Opacity (0-1) of the radar layer. Driven by the ribbon's radar slider.</summary>
 		public double RadarOpacity
 		{
@@ -570,6 +630,14 @@ namespace OfflineMapsTest.ViewModels
 
 				_radarProductIndex = value;
 				OnPropertyChanged();
+
+				// Re-derive the scrubber cells for the newly-active product. We deliberately do NOT blank
+				// the velocity-ready set here: radar.js posts fresh build progress synchronously from
+				// setProduct, so a moment later SetBuildProgress corrects it. With velocity now PREFETCHED
+				// in the background (see PrefetchRadarVelocityAsync), it's usually already built when the
+				// user switches, so the scrubber stays lit — instant, no blank flash. If it's still
+				// building, the not-yet-built cells drop to "loading" and fill in, same as any load.
+				RefreshSegmentReadiness();
 
 				if (_isMapReady)
 				{

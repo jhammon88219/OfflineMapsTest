@@ -13,15 +13,15 @@ namespace OfflineMapsTest.ViewModels
 {
 	/// <summary>
 	/// View model for the SPC outlook subsystem: the day/product selection + overlay opacity,
-	/// the watch-box toggle, the issued/valid readout + info card + forecast-discussion narrative,
-	/// the next-update progress bar, and the background refresh loops (outlook + watches). Extracted
-	/// from MapViewModel; drives the map through <see cref="IMapService"/>.
+	/// the issued/valid readout + info card + forecast-discussion narrative, the next-update progress
+	/// bar, and the outlook background refresh loop. Extracted from MapViewModel; drives the map through
+	/// <see cref="IMapService"/>. (SPC watch boxes are a separate subsystem — see
+	/// <see cref="WatchesViewModel"/> — since they're current-conditions alerts, not a forecast.)
 	/// </summary>
 	public sealed class OutlookViewModel : INotifyPropertyChanged
 	{
 		private readonly IMapService _mapService;
 		private readonly ISpcOutlookService _spcOutlookService;
-		private readonly ISpcWatchService _watchService;
 		private readonly DispatcherQueue _dispatcher;
 
 		// Readiness guard: outlook/watch commands only run once the map page has reported 'mapReady'
@@ -38,9 +38,6 @@ namespace OfflineMapsTest.ViewModels
 		// Master "show outlook layer" gate (Outlook tool-window toggle). Defaults OFF so the app
 		// launches with no outlook drawn; flipping it on shows the armed Day/Product selection.
 		private bool _isOutlookVisible;
-		// SPC watch-box overlay toggle (Outlook tool window). Independent of the outlook; default
-		// OFF so the app launches with no watch boxes drawn.
-		private bool _showWatches;
 
 		// Authoritative issued/valid/expire readout for the loaded outlook, parsed from
 		// the product's cached GeoJSON. Empty when None is selected or no times are known.
@@ -59,11 +56,10 @@ namespace OfflineMapsTest.ViewModels
 		private DateTimeOffset? _outlookCycleStart;
 		private DateTimeOffset? _nextOutlookRefreshAt;
 
-		public OutlookViewModel(IMapService mapService, ISpcOutlookService spcOutlookService, ISpcWatchService watchService)
+		public OutlookViewModel(IMapService mapService, ISpcOutlookService spcOutlookService)
 		{
 			_mapService = mapService;
 			_spcOutlookService = spcOutlookService;
-			_watchService = watchService;
 			_dispatcher = DispatcherQueue.GetForCurrentThread();
 
 			// SPC outlook selectors. Day 1 Categorical is the armed default, but the visibility toggle
@@ -76,32 +72,18 @@ namespace OfflineMapsTest.ViewModels
 			_selectedOption = DefaultOptionForDay();
 		}
 
-		/// <summary>Kicks off the outlook + watch background refresh loops (called once at launch).</summary>
+		/// <summary>Kicks off the outlook background refresh loop (called once at launch). Watches have
+		/// their own loop — see <see cref="WatchesViewModel.StartBackgroundRefresh"/>.</summary>
 		public void StartBackgroundRefresh()
 		{
 			_ = RefreshOutlooksInBackgroundAsync();
-			_ = RefreshWatchesInBackgroundAsync();
 		}
 
 		// SPC products update a handful of times a day at scheduled issuances; poll periodically so
 		// we catch new ones. Conditional GETs make each cycle cheap (mostly 304s when unchanged).
 		private static readonly TimeSpan OutlookRefreshInterval = TimeSpan.FromMinutes(15);
 
-		// Runs work(first) immediately, then every `interval` for the app's life; `first` is true only
-		// on the launch cycle. Each caller owns its try/catch so one bad cycle can't kill the loop.
-		private static async Task RunPeriodicAsync(TimeSpan interval, Func<bool, Task> work)
-		{
-			var first = true;
-			using var timer = new PeriodicTimer(interval);
-			do
-			{
-				await work(first);
-				first = false;
-			}
-			while (await timer.WaitForNextTickAsync());
-		}
-
-		private Task RefreshOutlooksInBackgroundAsync() => RunPeriodicAsync(OutlookRefreshInterval, async first =>
+		private Task RefreshOutlooksInBackgroundAsync() => BackgroundRefresh.RunPeriodicAsync(OutlookRefreshInterval, async first =>
 		{
 			try
 			{
@@ -128,30 +110,6 @@ namespace OfflineMapsTest.ViewModels
 			// the refresh itself takes seconds, negligible vs the 15-min interval). Runs every cycle.
 			var cycleStart = DateTimeOffset.Now;
 			_dispatcher.TryEnqueue(() => SetOutlookRefreshSchedule(cycleStart, cycleStart + OutlookRefreshInterval));
-		});
-
-		// SPC watches change on roughly hourly scales but expire continuously; a few-minute refresh
-		// keeps the active set current (the service re-filters to in-effect watches each cycle).
-		private static readonly TimeSpan WatchRefreshInterval = TimeSpan.FromMinutes(2);
-
-		private Task RefreshWatchesInBackgroundAsync() => RunPeriodicAsync(WatchRefreshInterval, async first =>
-		{
-			try
-			{
-				var result = await _watchService.RefreshAsync();
-				System.Diagnostics.Debug.WriteLine($"[SPC] watches refresh: {result.Status} active={result.ActiveCount} {result.Message}");
-
-				// Re-point the page at the cache so it reloads — on launch (first-run empty cache) and
-				// whenever a cycle pulled fresh data.
-				if (first || result.Status is SpcWatchFetchStatus.Updated)
-				{
-					_dispatcher.TryEnqueue(() => OnWatchesRefreshed());
-				}
-			}
-			catch (Exception ex)
-			{
-				System.Diagnostics.Debug.WriteLine($"[SPC] watches refresh aborted: {ex.Message}");
-			}
 		});
 
 		/// <summary>Outlook days that have products (1-8), each labeled with its date;
@@ -242,40 +200,6 @@ namespace OfflineMapsTest.ViewModels
 				_isOutlookVisible = value;
 				OnPropertyChanged();
 				ApplyCurrentOutlook();
-			}
-		}
-
-		/// <summary>Show the SPC watch boxes — Tornado / Severe Thunderstorm Watches — on the map
-		/// (Outlook tool-window toggle, default off).</summary>
-		public bool ShowWatches
-		{
-			get => _showWatches;
-			set
-			{
-				if (_showWatches == value)
-				{
-					return;
-				}
-
-				_showWatches = value;
-				OnPropertyChanged();
-				if (_isMapReady)
-				{
-					_ = _mapService.SetWatchesVisibleAsync(value);
-				}
-			}
-		}
-
-		/// <summary>
-		/// Re-pushes the watch source URL to the page so it re-fetches the freshly-cached boxes.
-		/// Called by the view after a background watch refresh; the page only re-fetches when the
-		/// watch layer is shown.
-		/// </summary>
-		public void OnWatchesRefreshed()
-		{
-			if (_isMapReady)
-			{
-				_ = _mapService.SetWatchSourceAsync(_watchService.WatchesUrl);
 			}
 		}
 
@@ -544,8 +468,8 @@ namespace OfflineMapsTest.ViewModels
 		/// </summary>
 		public void OnOutlooksRefreshed() => ApplyCurrentOutlook();
 
-		/// <summary>Called by MapViewModel once the map page is ready: applies the startup outlook +
-		/// watch state and starts the next-update progress tick.</summary>
+		/// <summary>Called by MapViewModel once the map page is ready: applies the startup outlook state
+		/// and starts the next-update progress tick.</summary>
 		public async Task OnMapsReadyAsync()
 		{
 			_isMapReady = true;
@@ -559,10 +483,6 @@ namespace OfflineMapsTest.ViewModels
 			}
 			await _mapService.SetOutlookOpacityAsync(_outlookOpacity);
 			UpdateOutlookTimes();
-
-			// Point the page at the cached SPC watch boxes and apply the current toggle state.
-			await _mapService.SetWatchSourceAsync(_watchService.WatchesUrl);
-			await _mapService.SetWatchesVisibleAsync(_showWatches);
 
 			// Drive the SPC outlook next-update progress bar.
 			_ = RunProgressTickAsync();

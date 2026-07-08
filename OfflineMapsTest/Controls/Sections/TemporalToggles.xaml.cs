@@ -5,10 +5,11 @@ using OfflineMapsTest.ViewModels;
 namespace OfflineMapsTest.Controls.Sections
 {
 	/// <summary>
-	/// The transport bar's left section: three temporal-category checkboxes (PastCast / NowCast /
-	/// ForeCast) that enable each time-frame's features on the map. Cross-category, so it binds the
-	/// coordinator <see cref="MapViewModel"/>. PastCast ↔ <c>Radar.IsPastEventMode</c>; the others are
-	/// placeholders until their features are re-added.
+	/// The overlay bar's left section: three temporal features (PastCast / NowCast / ForeCast), each a
+	/// two-part split button — a feature toggle (left) + a settings cog (right) that opens that feature's
+	/// floating card (see <see cref="TemporalCards"/>). A 3-way radio routed through
+	/// <see cref="MapViewModel.TemporalMode"/> (Past/Fore mutually exclusive; Now = live). The cog is
+	/// disabled until its feature is on. Binds the coordinator <see cref="MapViewModel"/>.
 	/// </summary>
 	public sealed partial class TemporalToggles : UserControl
 	{

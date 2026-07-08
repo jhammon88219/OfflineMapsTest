@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- OutlookInput — the SPC outlook selectors, shown as the body of the ForeCast settings card (floating
+     above the overlay bar). Laid out entirely with grids ([label | control] rows, no StackPanels) so it's
+     easy to edit. The Day combo is self-labeling ("Day 1 · Sat Jun 14"); changing it cascades the Product
+     list and re-selects a product. Opacity is the polygon fill (outlines stay opaque). Watches moved to
+     the NowCast card (they're active current-conditions alerts, not a forecast). Bound to OutlookViewModel. -->
+<UserControl x:Class="OfflineMapsTest.Controls.Sections.OutlookInput"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             mc:Ignorable="d">
+
+    <UserControl.Resources>
+        <Style x:Key="OutlookLabelStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Foreground" Value="{ThemeResource TextFillColorTertiaryBrush}"/>
+        </Style>
+    </UserControl.Resources>
+
+    <!-- Outer grid: label column + control column, one row per field. -->
+    <Grid ColumnSpacing="12" RowSpacing="10" VerticalAlignment="Top">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="Auto"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/> <!-- Day -->
+            <RowDefinition Height="Auto"/> <!-- Product -->
+            <RowDefinition Height="Auto"/> <!-- Opacity -->
+        </Grid.RowDefinitions>
+
+        <!-- Day: self-labeling day picker. -->
+        <TextBlock Grid.Row="0" Grid.Column="0" Text="Day" Style="{StaticResource OutlookLabelStyle}"/>
+        <ComboBox Grid.Row="0" Grid.Column="1"
+                  Width="180" HorizontalAlignment="Left"
+                  ItemsSource="{x:Bind ViewModel.Days}"
+                  DisplayMemberPath="Label"
+                  SelectedItem="{x:Bind ViewModel.SelectedDayOption, Mode=TwoWay}"
+                  ToolTipService.ToolTip="SPC outlook day"/>
+
+        <!-- Product: the day's outlook types (+ None). -->
+        <TextBlock Grid.Row="1" Grid.Column="0" Text="Product" Style="{StaticResource OutlookLabelStyle}"/>
+        <ComboBox Grid.Row="1" Grid.Column="1"
+                  Width="180" HorizontalAlignment="Left"
+                  ItemsSource="{x:Bind ViewModel.ProductOptions, Mode=OneWay}"
+                  DisplayMemberPath="Label"
+                  SelectedItem="{x:Bind ViewModel.SelectedOption, Mode=TwoWay}"
+                  ToolTipService.ToolTip="Outlook product (None clears the overlay)"/>
+
+        <!-- Opacity: fill opacity (outlines stay solid). -->
+        <TextBlock Grid.Row="2" Grid.Column="0" Text="Opacity" Style="{StaticResource OutlookLabelStyle}"/>
+        <Slider Grid.Row="2" Grid.Column="1"
+                Width="180" HorizontalAlignment="Left"
+                Minimum="0" Maximum="1"
+                StepFrequency="0.05" SmallChange="0.05"
+                IsThumbToolTipEnabled="False"
+                VerticalAlignment="Center"
+                Value="{x:Bind ViewModel.OutlookOpacity, Mode=TwoWay}"
+                ToolTipService.ToolTip="Outlook fill opacity (outlines stay solid)"/>
+    </Grid>
+</UserControl>

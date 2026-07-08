@@ -1,22 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- PastEventInput — the Past Event Viewer's date/start/window form shown INLINE in the transport bar's
-     right context region (ContextBar) whenever PastCast (Radar.IsPastEventMode) is on. It replaces the
-     old flyout (Controls/Flyouts/PastEventControls) so there's no extra click to enter the parameters.
-     Laid out as a tight 3-row label|control grid that fits within the bar's existing height (the 150px
-     RadialTransport dial), so surfacing it never grows the bar. Date + time are editable comboboxes
-     (type OR pick); AM/PM is a checkbox pair. Date binds RadarViewModel's Year/Month/Day indices
-     directly; the hour/minute/AM-PM widgets convert to/from the VM's PastEventTime (TimeSpan) in
-     code-behind. Bound to RadarViewModel. -->
-<UserControl
-    x:Class="OfflineMapsTest.Controls.Sections.PastEventInput"
-    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
-    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-    mc:Ignorable="d">
+<!-- PastEventInput — the Past Event Viewer's date/start/window form, shown as the body of the PastCast
+     settings card (floating above the overlay bar). Laid out ENTIRELY with grids (rows/columns, no
+     StackPanels) so rows are easy to add/rearrange: a fixed [label | controls] outer grid, one row per
+     field, and each multi-widget field is its own nested column grid. Date + window bind RadarViewModel
+     indices directly; the editable hour/minute combos + AM/PM pair convert to/from the VM's PastEventTime
+     (TimeSpan) in code-behind (element names HourCombo / MinuteCombo / AmCheck / PmCheck must stay).
+     Bound to RadarViewModel. -->
+<UserControl x:Class="OfflineMapsTest.Controls.Sections.PastEventInput"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             mc:Ignorable="d">
 
     <UserControl.Resources>
-        <!-- Compact combo + tight left label so the whole form stays under the dial's height. -->
         <Style x:Key="PastLabelStyle" TargetType="TextBlock">
             <Setter Property="FontSize" Value="12"/>
             <Setter Property="VerticalAlignment" Value="Center"/>
@@ -24,56 +21,73 @@
         </Style>
     </UserControl.Resources>
 
-    <Grid ColumnSpacing="10" RowSpacing="6" VerticalAlignment="Center">
+    <!-- Outer grid: label column + control column, one row per field. -->
+    <Grid ColumnSpacing="12" RowSpacing="10" VerticalAlignment="Top">
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="Auto"/> <!-- labels -->
-            <ColumnDefinition Width="Auto"/> <!-- controls -->
+            <ColumnDefinition Width="Auto"/>
+            <ColumnDefinition Width="*"/>
         </Grid.ColumnDefinitions>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/> <!-- Date -->
-            <RowDefinition Height="Auto"/> <!-- Start -->
-            <RowDefinition Height="Auto"/> <!-- Window + Load -->
+            <RowDefinition Height="Auto"/> <!-- Start time -->
+            <RowDefinition Height="Auto"/> <!-- Window duration -->
+            <RowDefinition Height="Auto"/> <!-- Load + status -->
         </Grid.RowDefinitions>
 
-        <!-- Date: year / month / day — editable (type or pick). UTC, matching the archive keys. -->
-        <TextBlock Grid.Row="0" Grid.Column="0" Text="Date" Style="{StaticResource PastLabelStyle}"
-                   ToolTipService.ToolTip="Archive date in UTC (the AWS bucket is keyed by UTC day)."/>
-        <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal" Spacing="6">
-            <ComboBox Width="78" IsEditable="True"
+        <!-- Date: year / month / day. -->
+        <TextBlock Grid.Row="0" Grid.Column="0" Text="Date" Style="{StaticResource PastLabelStyle}"/>
+        <Grid Grid.Row="0" Grid.Column="1" ColumnSpacing="6" HorizontalAlignment="Left">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <ComboBox Grid.Column="0" Width="88" IsEditable="True"
                       ItemsSource="{x:Bind ViewModel.PastEventYearOptions}"
                       SelectedIndex="{x:Bind ViewModel.PastEventYearIndex, Mode=TwoWay}"/>
-            <ComboBox Width="60" IsEditable="True"
+            <ComboBox Grid.Column="1" Width="64" IsEditable="True"
                       ItemsSource="{x:Bind ViewModel.PastEventMonthOptions}"
                       SelectedIndex="{x:Bind ViewModel.PastEventMonthIndex, Mode=TwoWay}"/>
-            <ComboBox Width="60" IsEditable="True"
+            <ComboBox Grid.Column="2" Width="64" IsEditable="True"
                       ItemsSource="{x:Bind ViewModel.PastEventDayOptions}"
                       SelectedIndex="{x:Bind ViewModel.PastEventDayIndex, Mode=TwoWay}"/>
-        </StackPanel>
+        </Grid>
 
-        <!-- Start time (local): editable hour / minute + AM/PM checkbox pair. -->
-        <TextBlock Grid.Row="1" Grid.Column="0" Text="Start" Style="{StaticResource PastLabelStyle}"
-                   ToolTipService.ToolTip="Start of the replay window, in your local time."/>
-        <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-            <ComboBox x:Name="HourCombo" Width="60" IsEditable="True"
+        <!-- Start time: hour : minute + AM/PM pair. -->
+        <TextBlock Grid.Row="1" Grid.Column="0" Text="Start" Style="{StaticResource PastLabelStyle}"/>
+        <Grid Grid.Row="1" Grid.Column="1" ColumnSpacing="6" HorizontalAlignment="Left">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <ComboBox x:Name="HourCombo" Grid.Column="0" Width="64" IsEditable="True"
                       SelectionChanged="OnTimePartChanged" TextSubmitted="OnTimeTextSubmitted"/>
-            <TextBlock Text=":" VerticalAlignment="Center" FontSize="14"/>
-            <ComboBox x:Name="MinuteCombo" Width="60" IsEditable="True"
+            <TextBlock Grid.Column="1" Text=":" VerticalAlignment="Center" FontSize="14"/>
+            <ComboBox x:Name="MinuteCombo" Grid.Column="2" Width="64" IsEditable="True"
                       SelectionChanged="OnTimePartChanged" TextSubmitted="OnTimeTextSubmitted"/>
-            <CheckBox x:Name="AmCheck" Content="AM" MinWidth="0" Margin="6,0,0,0" Click="OnAmClick"/>
-            <CheckBox x:Name="PmCheck" Content="PM" MinWidth="0" Click="OnPmClick"/>
-        </StackPanel>
+            <CheckBox x:Name="AmCheck" Grid.Column="3" Content="AM" MinWidth="0" Margin="6,0,0,0" Click="OnAmClick"/>
+            <CheckBox x:Name="PmCheck" Grid.Column="4" Content="PM" MinWidth="0" Click="OnPmClick"/>
+        </Grid>
 
-        <!-- Window length + Load + status on one row. -->
-        <TextBlock Grid.Row="2" Grid.Column="0" Text="Window" Style="{StaticResource PastLabelStyle}"
-                   ToolTipService.ToolTip="How much time to replay from the start."/>
-        <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-            <ComboBox Width="120" IsEditable="True"
-                      ItemsSource="{x:Bind ViewModel.PastEventDurationOptions}"
-                      SelectedIndex="{x:Bind ViewModel.PastEventDurationIndex, Mode=TwoWay}"/>
-            <Button Content="Load" Style="{ThemeResource AccentButtonStyle}" Click="OnLoadClick"/>
-            <TextBlock Text="{x:Bind ViewModel.PastEventStatus, Mode=OneWay}" TextWrapping="Wrap"
-                       VerticalAlignment="Center" FontSize="12" MaxWidth="140"
+        <!-- Window duration. -->
+        <TextBlock Grid.Row="2" Grid.Column="0" Text="Window" Style="{StaticResource PastLabelStyle}"/>
+        <ComboBox Grid.Row="2" Grid.Column="1" Width="130" HorizontalAlignment="Left" IsEditable="True"
+                  ItemsSource="{x:Bind ViewModel.PastEventDurationOptions}"
+                  SelectedIndex="{x:Bind ViewModel.PastEventDurationIndex, Mode=TwoWay}"/>
+
+        <!-- Load button + status text. -->
+        <Grid Grid.Row="3" Grid.Column="1" ColumnSpacing="10" Margin="0,2,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            <Button Grid.Column="0" Content="Load" Style="{ThemeResource AccentButtonStyle}" Click="OnLoadClick"/>
+            <TextBlock Grid.Column="1" Text="{x:Bind ViewModel.PastEventStatus, Mode=OneWay}"
+                       TextWrapping="Wrap" VerticalAlignment="Center" FontSize="12"
                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-        </StackPanel>
+        </Grid>
     </Grid>
 </UserControl>

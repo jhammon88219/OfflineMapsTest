@@ -96,6 +96,8 @@ namespace OfflineMapsTest.ViewModels
 			_liveFrame = null;
 			_liveModeText = null;
 			_frameTimes = Array.Empty<DateTimeOffset?>();
+			_frameModes = Array.Empty<string?>();
+			Segments.Clear();
 			_loadedNewestKey = null;
 			_loadedKeys = Array.Empty<string>();
 			_lastLivePollAt = null;
@@ -285,6 +287,8 @@ namespace OfflineMapsTest.ViewModels
 				_hasLiveFrame = false;
 				_liveModeText = null;
 				_frameTimes = new DateTimeOffset?[_frameCount];
+				_frameModes = new string?[_frameCount];
+				RebuildSegments(_frameCount); // empty scrubber cells; they light as frames decode
 				_readyCount = 0;
 				_loadedKeys = keys.ToArray();
 				_loadedNewestKey = keys[^1];
@@ -301,12 +305,9 @@ namespace OfflineMapsTest.ViewModels
 				}
 				_loopRenderBegun = true;
 
-				// Oldest frame first (it's adopted + shown immediately), then the rest in order.
+				// Oldest frame first (it's adopted + shown immediately), then the rest in parallel (bounded).
 				await EnsureAndAddFrameAsync(site, keys, 0, ct);
-				for (var i = 1; i < keys.Count && !ct.IsCancellationRequested; i++)
-				{
-					await EnsureAndAddFrameAsync(site, keys, i, ct);
-				}
+				await BackfillFramesAsync(site, keys, 1, keys.Count, ct);
 				_loadInProgress = false;
 			}
 			finally
@@ -390,6 +391,8 @@ namespace OfflineMapsTest.ViewModels
 			_hasLiveFrame = false;
 			_frameCount = _archiveCount;
 			_frameTimes = new DateTimeOffset?[_frameCount];
+			_frameModes = new string?[_frameCount];
+			RebuildSegments(_frameCount); // empty scrubber cells; they light as frames decode
 			_readyCount = 0;
 			_loadedNewestKey = keys[_archiveCount - 1]; // archive newest drives the 5-min reload
 			_loadedKeys = keys.ToArray();               // baseline for the next incremental refresh
@@ -412,18 +415,17 @@ namespace OfflineMapsTest.ViewModels
 			// Newest archive frame first (immediate display).
 			await EnsureAndAddFrameAsync(site, keys, _archiveCount - 1, ct);
 
-			// Pull the live (chunks) frame + scan mode NEXT — before the older-frame backfill — so
-			// the card's time/mode/freshness populate in ~1-2 s instead of waiting out the full
-			// backfill (~5 s). It appends at index _archiveCount when fresher; the backfill then
-			// fills 0.._archiveCount-2 behind the already-populated card.
-			await RefreshLiveFrameAsync(site, ct);
+			// Backfill the older archive frames IN PARALLEL (bounded) — each frame's cost is a full-
+			// volume AWS download + bzip2 tilt extraction, so running them concurrently is the main lever
+			// for "load all back frames faster". This now runs BEFORE the live poll: the chunks-bucket
+			// live frame is slow to build (~8-12 s — dozens/hundreds of chunks to download + bzip2-decode),
+			// and awaiting it first BLOCKED the fast parallel backfill, which read as a long "stall on
+			// frame 1". Filling the visible loop first, then appending the live frame, is far snappier.
+			await BackfillFramesAsync(site, keys, 0, _archiveCount - 1, ct);
 
-			// Backfill the older archive frames. Bound by _archiveCount, NOT _frameCount — the live
-			// frame above may have grown _frameCount, and these indices are archive-only.
-			for (var i = 0; i < _archiveCount - 1 && !ct.IsCancellationRequested; i++)
-			{
-				await EnsureAndAddFrameAsync(site, keys, i, ct);
-			}
+			// Now pull the live (chunks) frame + scan mode; it appends at index _archiveCount when fresher
+			// than the archive newest, and carries the scan-mode text for the card.
+			await RefreshLiveFrameAsync(site, ct);
 		}
 
 		// Fetches the live (chunks) frame and, when it's newer than what's shown, applies it —
@@ -476,6 +478,10 @@ namespace OfflineMapsTest.ViewModels
 				{
 					_frameTimes[_archiveCount] = live.VolumeTime;
 				}
+				if (_archiveCount < _frameModes.Length)
+				{
+					_frameModes[_archiveCount] = live.ModeText;
+				}
 				Services.RadarDiagnostics.Log("vm", "live.apply", ("action", "update"),
 					("idx", _archiveCount), ("volZ", live.VolumeTime.ToUniversalTime().ToString("HH:mm:ss")));
 				Services.RadarDiagnostics.RegisterFrameSource(_archiveCount, "live", FrameCacheFile(live), live.VolumeTime);
@@ -507,6 +513,17 @@ namespace OfflineMapsTest.ViewModels
 			Array.Copy(_frameTimes, grown, _archiveCount);
 			grown[_archiveCount] = live.VolumeTime;
 			_frameTimes = grown;
+			var grownModes = new string?[_archiveCount + 1];
+			Array.Copy(_frameModes, grownModes, Math.Min(_archiveCount, _frameModes.Length));
+			grownModes[_archiveCount] = live.ModeText;
+			_frameModes = grownModes;
+			// Grow the scrubber to include the live frame's cell (keeps Segments.Count == _frameCount, so
+			// the playhead — which divides the track by Segments.Count — stays aligned). OnRadarFrameReady
+			// lights it once it decodes.
+			if (Segments.Count == _archiveCount)
+			{
+				Segments.Add(new RadarFrameSegment());
+			}
 			_liveFrame = live;
 			_hasLiveFrame = true;
 			_frameCount = _archiveCount + 1;
@@ -562,6 +579,7 @@ namespace OfflineMapsTest.ViewModels
 				}
 
 				_frameTimes[index] = volume.VolumeTime;
+				if (index < _frameModes.Length) _frameModes[index] = volume.ModeText;
 				Services.RadarDiagnostics.RegisterFrameSource(index, "archive", FrameCacheFile(volume), volume.VolumeTime);
 				if (_isMapReady)
 				{
@@ -576,6 +594,48 @@ namespace OfflineMapsTest.ViewModels
 			{
 				// Skip a bad frame; the rest of the loop still loads.
 				Services.RadarDiagnostics.Log("vm", "frame.fail", ("idx", index), ("error", ex.Message));
+			}
+		}
+
+		// How many archive volumes to download + extract concurrently during backfill. The per-frame cost
+		// is network + bzip2 extraction; 6 keeps AWS + the threadpool busy without hammering either.
+		private const int MaxParallelBackfill = 6;
+
+		// Loads a run of frames [startInclusive, endExclusive) with BOUNDED PARALLELISM. The per-frame
+		// cost is a network download + bzip2 tilt extraction (both off the UI thread), so overlapping
+		// them cuts a ~10-frame backfill from tens of seconds to a few. Concurrency is safe: each frame
+		// writes its own index and caches to its own file; only the light AddRadarFrameAsync posts
+		// resume on the UI thread (WebView2 is UI-affine), which serializes them naturally. Runs under
+		// the caller's _loopGate, so no live poll can interleave.
+		private async Task BackfillFramesAsync(RadarSite site, IReadOnlyList<string> keys, int startInclusive, int endExclusive, CancellationToken ct)
+		{
+			using var gate = new SemaphoreSlim(MaxParallelBackfill);
+			var tasks = new List<Task>();
+			for (var i = startInclusive; i < endExclusive && !ct.IsCancellationRequested; i++)
+			{
+				try
+				{
+					await gate.WaitAsync(ct); // cap frames in flight
+				}
+				catch (OperationCanceledException)
+				{
+					break;
+				}
+				var index = i;
+				tasks.Add(BackfillOneAsync(index));
+			}
+			await Task.WhenAll(tasks);
+
+			async Task BackfillOneAsync(int index)
+			{
+				try
+				{
+					await EnsureAndAddFrameAsync(site, keys, index, ct);
+				}
+				finally
+				{
+					gate.Release();
+				}
 			}
 		}
 
@@ -608,7 +668,13 @@ namespace OfflineMapsTest.ViewModels
 			}
 
 			_readyCount++;
-			OnPropertyChanged(nameof(RadarLoadingText));
+			if (index >= 0 && index < Segments.Count)
+			{
+				// Mark decoded, then derive the displayed readiness for the active product (Velocity still
+				// needs its dealiased geometry, so the cell may stay "loading" until the build reaches it).
+				Segments[index].IsDecoded = true;
+				Segments[index].IsReady = IsFrameDisplayReady(index);
+			}
 			Services.RadarDiagnostics.FrameReady(index, hasData, _readyCount, _frameCount);
 
 			// First-frame timing: the moment the first frame of this click is decoded + shown.
@@ -669,8 +735,18 @@ namespace OfflineMapsTest.ViewModels
 						continue;
 					}
 
+					// Hold at the built frontier: don't advance onto a frame whose velocity is still being
+					// dealiased in the background (that would flash blank / stall ~1.5 s mid-playback). The
+					// upgrade queue builds forward from the playhead, so playback resumes on its own as each
+					// next frame becomes ready. Reflectivity/CC are always ready, so this never holds there.
+					var next = (_currentFrameIndex + 1) % _frameCount;
+					if (!IsFrameDisplayReady(next))
+					{
+						continue;
+					}
+
 					dwell = 0;
-					CurrentFrameIndex = (_currentFrameIndex + 1) % _frameCount;
+					CurrentFrameIndex = next;
 				}
 			}
 			catch (OperationCanceledException)
@@ -709,6 +785,12 @@ namespace OfflineMapsTest.ViewModels
 					if (keys.Count > 0 && keys[keys.Count - 1] != _loadedNewestKey)
 					{
 						Services.RadarDiagnostics.Log("vm", "refresh.archive", ("newKey", keys[^1]), ("oldKey", _loadedNewestKey));
+						// Predictive prefetch: pull the new volume's .V06 to disk FIRST, OFF the loop's
+						// critical path (no _loopGate, no loop-state changes) — so the download (the slow
+						// part) happens while the loop stays fully live, and the incremental fold-in below
+						// is decode-only (its EnsureCachedAsync becomes an instant disk hit). Without this,
+						// the fold ran the download while HOLDING _loopGate, stalling the live-frame poll.
+						await PrefetchArchiveFramesAsync(site, keys, ct);
 						// Incrementally fold in the new volume (reuse the unchanged decoded frames, no
 						// layer teardown) instead of a full rebuild — that rebuild blanked the radar for
 						// ~1.5-6 s and flashed a stale archive frame every 5 min.
@@ -747,6 +829,9 @@ namespace OfflineMapsTest.ViewModels
 				}
 
 				var oldFrameTimes = _frameTimes;
+				var oldFrameModes = _frameModes;
+				var oldReady = new bool[Segments.Count]; // reused frames keep their DECODE state (relit per product)
+				for (var i = 0; i < oldReady.Length; i++) oldReady[i] = Segments[i].IsDecoded;
 				var oldArchiveCount = _archiveCount;
 				var oldFrameCount = _frameCount;
 				var hadLive = _hasLiveFrame;
@@ -763,6 +848,8 @@ namespace OfflineMapsTest.ViewModels
 				var newArchiveCount = newKeys.Count;
 				var newFrameCount = newArchiveCount + (hadLive ? 1 : 0);
 				var newTimes = new DateTimeOffset?[newFrameCount];
+				var newModes = new string?[newFrameCount];       // scan mode, reused in lockstep with times
+				var newReady = new bool[newFrameCount];           // lit scrubber cells, reused in lockstep
 				var mapping = new List<int[]>(newFrameCount);     // [fromIndex, toIndex] reuses
 				var newIndices = new List<int>();                  // new archive slots needing decode
 
@@ -772,6 +859,8 @@ namespace OfflineMapsTest.ViewModels
 					{
 						mapping.Add(new[] { oi, j });
 						newTimes[j] = oldFrameTimes[oi];
+						if (oi < oldFrameModes.Length) newModes[j] = oldFrameModes[oi];
+						if (oi < oldReady.Length) newReady[j] = oldReady[oi];
 					}
 					else
 					{
@@ -784,6 +873,8 @@ namespace OfflineMapsTest.ViewModels
 				{
 					mapping.Add(new[] { oldArchiveCount, newArchiveCount });
 					newTimes[newArchiveCount] = oldFrameTimes[oldArchiveCount];
+					if (oldArchiveCount < oldFrameModes.Length) newModes[newArchiveCount] = oldFrameModes[oldArchiveCount];
+					if (oldArchiveCount < oldReady.Length) newReady[newArchiveCount] = oldReady[oldArchiveCount];
 				}
 
 				// Where the displayed frame lands after the reindex (so we can keep it on screen).
@@ -801,6 +892,8 @@ namespace OfflineMapsTest.ViewModels
 				_archiveCount = newArchiveCount;
 				_frameCount = newFrameCount;
 				_frameTimes = newTimes;
+				_frameModes = newModes;
+				RebuildSegments(newFrameCount, newReady); // reindex scrubber cells; reused frames stay lit
 				_readyCount = mapping.Count;
 				_currentFrameIndex = wasNewest ? newFrameCount - 1
 					: newCurrent >= 0 ? newCurrent
@@ -834,6 +927,53 @@ namespace OfflineMapsTest.ViewModels
 			{
 				_loopGate.Release();
 			}
+		}
+
+		// Predictive prefetch: warm the on-disk .V06 cache for the volumes a reload is about to fold in,
+		// WITHOUT _loopGate and WITHOUT touching loop state — so the download happens with the loop fully
+		// live, and the subsequent ReloadLoopIncrementalAsync only decodes (EnsureCachedAsync then returns
+		// the already-cached file instantly). Bounded parallelism like the backfill; already-cached keys
+		// are a cheap File.Exists no-op inside EnsureCachedAsync, and every failure is per-frame + non-fatal
+		// (the fold-in will just download that one itself, as before).
+		private async Task PrefetchArchiveFramesAsync(RadarSite site, IReadOnlyList<string> newKeys, CancellationToken ct)
+		{
+			var loaded = new HashSet<string>(_loadedKeys, StringComparer.Ordinal);
+			var toPrefetch = newKeys.Where(k => !loaded.Contains(k)).ToList();
+			if (toPrefetch.Count == 0)
+			{
+				return;
+			}
+
+			using var gate = new SemaphoreSlim(MaxParallelBackfill);
+			var tasks = toPrefetch.Select(async key =>
+			{
+				try
+				{
+					await gate.WaitAsync(ct);
+				}
+				catch (OperationCanceledException)
+				{
+					return;
+				}
+				try
+				{
+					await _radarService.EnsureCachedAsync(site, key, ct);
+				}
+				catch (OperationCanceledException)
+				{
+					// Selection changed; stop.
+				}
+				catch (Exception ex)
+				{
+					Services.RadarDiagnostics.Log("vm", "prefetch.fail", ("key", key), ("error", ex.Message));
+				}
+				finally
+				{
+					gate.Release();
+				}
+			});
+			await Task.WhenAll(tasks);
+			Services.RadarDiagnostics.Log("vm", "prefetch", ("count", toPrefetch.Count), ("newest", newKeys[^1]));
 		}
 
 		// Pulls the freshest chunks-bucket frame and (when newer) updates the trailing live slot

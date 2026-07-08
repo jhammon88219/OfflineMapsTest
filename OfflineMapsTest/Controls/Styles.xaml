@@ -1,0 +1,150 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Shared, app-wide styles. Merged in App.xaml so any control/window can reference these by key.
+     Add reusable Styles / brushes here rather than inlining them in a single control's Resources. -->
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- ================================ Overlay surface brushes ================================
+         The opaque, theme-aware surface (+ hover) used by the bottom OverlayBar AND the floating
+         temporal settings cards that pop above it, so the two read as one system in Win11 light/dark.
+         Defined app-wide (here) rather than inside a single control so both reference the SAME keys and
+         can't drift. (Moved out of OverlayBar.xaml's local ThemeDictionaries.) -->
+    <ResourceDictionary.ThemeDictionaries>
+        <ResourceDictionary x:Key="Default">
+            <SolidColorBrush x:Key="OverlayBarSurfaceBrush" Color="#FF1C1C1C"/>
+            <SolidColorBrush x:Key="OverlayBarSurfaceHoverBrush" Color="#FF2A2A2A"/>
+        </ResourceDictionary>
+        <ResourceDictionary x:Key="Light">
+            <SolidColorBrush x:Key="OverlayBarSurfaceBrush" Color="#FFF3F3F3"/>
+            <SolidColorBrush x:Key="OverlayBarSurfaceHoverBrush" Color="#FFE4E4E4"/>
+        </ResourceDictionary>
+        <ResourceDictionary x:Key="HighContrast">
+            <SolidColorBrush x:Key="OverlayBarSurfaceBrush" Color="{ThemeResource SystemColorButtonFaceColor}"/>
+            <SolidColorBrush x:Key="OverlayBarSurfaceHoverBrush" Color="{ThemeResource SystemColorHighlightColor}"/>
+        </ResourceDictionary>
+    </ResourceDictionary.ThemeDictionaries>
+
+    <!-- ================================ No-background ComboBox ================================
+         A self-contained, OPT-IN minimal ComboBox: transparent box (in EVERY state — rest / hover /
+         pressed / focused / open / disabled), no border, no highlight; the closed selector blends into
+         whatever surface hosts it. Just set Style="{StaticResource NoBackgroundComboBoxStyle}" — nothing
+         else to add (no companion resources), and it affects ONLY the combos you tag.
+
+         How it stays background-less: the box paints from {TemplateBinding Background} (= Transparent) with
+         NO VisualState touching it, so there are no per-state fills to fight. The DROPDOWN popup is given
+         an explicit fully-OPAQUE, theme-aware surface (SolidBackgroundFillColor*), since the default flyout
+         brush is acrylic/translucent and washes out over the map. Dropdown ITEMS keep their normal
+         hover/selection (they're separate ComboBoxItem controls, untouched by this template). -->
+    <Style x:Key="NoBackgroundComboBoxStyle" TargetType="ComboBox">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="BorderBrush" Value="Transparent"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="Foreground" Value="{ThemeResource ComboBoxForeground}"/>
+        <Setter Property="Padding" Value="11,5,0,6"/>
+        <Setter Property="MinWidth" Value="0"/>
+        <Setter Property="HorizontalContentAlignment" Value="Left"/>
+        <Setter Property="VerticalContentAlignment" Value="Center"/>
+        <Setter Property="HorizontalAlignment" Value="Stretch"/>
+        <Setter Property="TabNavigation" Value="Once"/>
+        <Setter Property="UseSystemFocusVisuals" Value="True"/>
+        <Setter Property="ScrollViewer.HorizontalScrollMode" Value="Disabled"/>
+        <Setter Property="ScrollViewer.VerticalScrollMode" Value="Auto"/>
+        <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled"/>
+        <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Auto"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ComboBox">
+                    <Grid x:Name="LayoutRoot">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <!-- The box stays transparent in every state (see below); the ONLY state that
+                             changes anything is Disabled, which mutes the selected-item text + chevron so a
+                             disabled combo (e.g. Tilt) reads as disabled without gaining a background. -->
+                        <VisualStateManager.VisualStateGroups>
+                            <VisualStateGroup x:Name="CommonStates">
+                                <VisualState x:Name="Normal"/>
+                                <VisualState x:Name="PointerOver"/>
+                                <VisualState x:Name="Pressed"/>
+                                <VisualState x:Name="Disabled">
+                                    <VisualState.Setters>
+                                        <Setter Target="ContentPresenter.Foreground" Value="{ThemeResource ComboBoxForegroundDisabled}"/>
+                                        <Setter Target="DropDownGlyph.Foreground" Value="{ThemeResource ComboBoxDropDownGlyphForegroundDisabled}"/>
+                                    </VisualState.Setters>
+                                </VisualState>
+                            </VisualStateGroup>
+                        </VisualStateManager.VisualStateGroups>
+
+                        <!-- The box. Transparent + borderless via TemplateBinding, and no VisualState ever
+                             changes it, so it looks identical at rest, hover, pressed, focused and open. -->
+                        <Border x:Name="Background"
+                                Grid.ColumnSpan="2"
+                                MinHeight="32"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="{TemplateBinding CornerRadius}"
+                                Control.IsTemplateFocusTarget="True"/>
+
+                        <!-- Selected item. -->
+                        <ContentPresenter x:Name="ContentPresenter"
+                                Grid.Column="0"
+                                Margin="{TemplateBinding Padding}"
+                                HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
+                                Content="{TemplateBinding SelectionBoxItem}"
+                                ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"/>
+
+                        <!-- Chevron. -->
+                        <FontIcon x:Name="DropDownGlyph"
+                                Grid.Column="1"
+                                Margin="8,0,10,0"
+                                VerticalAlignment="Center"
+                                FontFamily="{ThemeResource SymbolThemeFontFamily}"
+                                FontSize="12"
+                                Glyph="&#xE70D;"
+                                Foreground="{ThemeResource ComboBoxDropDownGlyphForeground}"
+                                IsHitTestVisible="False"/>
+
+                        <!-- Dropdown popup: opaque, readable surface (NOT the default acrylic). -->
+                        <Popup x:Name="Popup">
+                            <Border x:Name="PopupBorder"
+                                    Background="{ThemeResource SolidBackgroundFillColorSecondaryBrush}"
+                                    BorderBrush="{ThemeResource SurfaceStrokeColorFlyoutBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="{ThemeResource OverlayCornerRadius}"
+                                    Padding="0,4,0,4"
+                                    MaxHeight="504"
+                                    HorizontalAlignment="Stretch">
+                                <ScrollViewer x:Name="ScrollViewer"
+                                        HorizontalScrollMode="{TemplateBinding ScrollViewer.HorizontalScrollMode}"
+                                        HorizontalScrollBarVisibility="{TemplateBinding ScrollViewer.HorizontalScrollBarVisibility}"
+                                        VerticalScrollMode="{TemplateBinding ScrollViewer.VerticalScrollMode}"
+                                        VerticalScrollBarVisibility="{TemplateBinding ScrollViewer.VerticalScrollBarVisibility}"
+                                        Foreground="{ThemeResource ComboBoxDropDownForeground}"
+                                        ZoomMode="Disabled"
+                                        AutomationProperties.AccessibilityView="Raw">
+                                    <ItemsPresenter/>
+                                </ScrollViewer>
+                            </Border>
+                        </Popup>
+                    </Grid>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Square transport button base: no min-size padding, centered glyph, rounded. Applied by the radar
+         transport (prev / play-stop / next) and available app-wide via Style="{StaticResource …}". -->
+    <Style x:Key="TransportButtonStyle" TargetType="Button">
+        <Setter Property="MinWidth" Value="0"/>
+        <Setter Property="MinHeight" Value="0"/>
+        <Setter Property="Padding" Value="0"/>
+        <Setter Property="CornerRadius" Value="8"/>
+        <Setter Property="HorizontalContentAlignment" Value="Center"/>
+        <Setter Property="VerticalContentAlignment" Value="Center"/>
+    </Style>
+
+</ResourceDictionary>

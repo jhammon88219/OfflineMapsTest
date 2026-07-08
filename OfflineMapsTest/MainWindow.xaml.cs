@@ -94,10 +94,11 @@ namespace OfflineMapsTest
 
 			_ = InitializeMapAsync();
 
-			// Start the SPC outlook + watch background refresh loops (owned by OutlookViewModel):
+			// Start the SPC outlook + watch background refresh loops (each owned by its own subsystem VM):
 			// the app stays usable offline from the existing cache while fresh data downloads, then
 			// keeps refreshing on a timer so a long-running session doesn't sit on stale data.
 			ViewModel.Outlook.StartBackgroundRefresh();
+			ViewModel.Watches.StartBackgroundRefresh();
 
 			// Write a final flush + report on close so the run's last events aren't lost between
 			// the ~2 s background flushes.

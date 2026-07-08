@@ -4,13 +4,13 @@
 self.onmessage = function (e) {
     const d = e.data;
     import('./radar-decode.js').then(function (m) {
-        return m.decodeAndBuild(d.ab, d.siteLat, d.siteLon, d.minDbz);
+        return m.decodeAndBuild(d.ab, d.siteLat, d.siteLon, d.minDbz, d.buildVel, d.buildGrids);
     }).then(function (res) {
         const g = res.geom;      // reflectivity
         const v = res.velGeom;   // velocity
         const cc = res.ccGeom;   // correlation coefficient (ρHV)
         const msg = {
-            token: d.token, index: d.index, decodeMs: res.decodeMs, buildMs: res.buildMs,
+            token: d.token, index: d.index, url: d.url, velBuilt: res.velBuilt, gridsBuilt: res.gridsBuilt, decodeMs: res.decodeMs, buildMs: res.buildMs,
             radials: res.radials, gates: res.gates, bytes: res.bytes, rangeMeters: res.rangeMeters,
             elevList: res.elevList, velElev: res.velElev, reflStats: res.reflStats, velStats: res.velStats,
             velNyq: res.velNyq, dealias: res.dealias,
@@ -26,6 +26,6 @@ self.onmessage = function (e) {
         addGrid('reflGrid', res.reflGrid); addGrid('velGrid', res.velGrid); addGrid('ccGrid', res.ccGrid);
         self.postMessage(msg, transfer); // zero-copy transfer of whichever geometries exist
     }).catch(function (err) {
-        self.postMessage({ token: d.token, index: d.index, error: String(err && err.message ? err.message : err) });
+        self.postMessage({ token: d.token, index: d.index, url: d.url, error: String(err && err.message ? err.message : err) });
     });
 };

@@ -6,15 +6,16 @@
 // These are DOM-overlay markers (maplibregl.Marker), so they auto-reposition on pan/zoom and survive
 // basemap switches (no style-layer re-add needed). Structure: a `.radar-site-marker` WRAPPER (which
 // MapLibre positions via an inline transform) holds an inner `.radar-site-btn` (free to use its own
-// transform for the press/sink effect). States: available (calm graphite key) / selected (latched
-// orange) / down (offline, muted dark-red dead key) + a status halo (::after). The same colors drive
-// the site-list rows so the two views match.
+// transform for the press/sink effect), which contains an availability `.radar-site-dot` + the ID
+// text (e.g. "• KTLX"). The DOT shows availability — green = available, red (.offline) = no recent data
+// — always, independent of selection; SELECTION is the inverted "light" key (dark text on near-white).
+// (The old accent status halo + orange-selected + dead-key offline styling were removed in this rework.)
 
 let radarMarkers = {};        // id -> inner button element (state ops target the button)
 let radarMarkerObjs = [];     // every Marker object (for show/hide + teardown)
 let selectedSiteId = null;
 let radarSitesVisible = true;
-let radarSiteOffline = new Set(); // site ids with no recent data in the feed (rendered "down")
+let radarSiteOffline = new Set(); // site ids with no recent data in the feed (red availability dot)
 
 function ensureStyle() {
     if (document.getElementById('radar-site-style')) return;
@@ -23,9 +24,11 @@ function ensureStyle() {
     siteStyle.textContent = `
         .radar-site-marker { line-height: 0; }
 
+        /* Pushable graphite "key" with an availability DOT before the ID (no halo). */
         .radar-site-btn {
-            position: relative;
-            display: inline-block;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
             font: 700 12px/1 "Segoe UI", sans-serif;
             letter-spacing: .3px;
             color: #f3f3f3;
@@ -45,74 +48,40 @@ function ensureStyle() {
             box-shadow: 0 1px 0 #161618, 0 1px 2px rgba(0, 0, 0, .4);
         }
 
-        /* Selected = latched down in accent orange. Sits permanently sunk onto its edge. */
+        /* Availability dot: green = available, red = offline (the staleness-ramp endpoint colors, so the
+           palette matches the freshness readout). Always shows availability, independent of selection.
+           The 1px inner ring gives it definition on both the dark key and the light selected key. */
+        .radar-site-dot {
+            flex: 0 0 auto;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #3fb950;
+            box-shadow: 0 0 0 1px rgba(0, 0, 0, .28);
+        }
+        .radar-site-btn.offline .radar-site-dot { background: #f85149; }
+
+        /* Selected = inverted "light" key (dark text on a near-white face). Distinct from BOTH the dark
+           unselected keys and the red/green dots (orange sat too close to the offline red). Latches down
+           onto its edge like a pressed key; the dot still shows availability on the light face. The active
+           site's "radar" is also the big geographic range ring + sweep drawn on the MAP (radar.js). */
         .radar-site-btn.selected {
-            color: #2a1300;
-            background: linear-gradient(#ffc070, #ff8a1a);
-            border-color: #944300;
+            color: #1a1a1a;
+            background: linear-gradient(#ffffff, #e8e8e8);
+            border-color: #b9b9b9;
             transform: translateY(2px);
-            box-shadow: 0 1px 0 #944300, 0 1px 3px rgba(0, 0, 0, .4);
+            box-shadow: 0 1px 0 #9a9a9a, 0 1px 3px rgba(0, 0, 0, .4);
         }
-
-        /* Offline (no recent data in the feed): muted dark-red "dead key". Still clickable;
-           keeps its thickness so it still reads as a button, just clearly not live. */
-        .radar-site-btn.down {
-            color: #e89b9b;
-            background: linear-gradient(#332629, #241a1c);
-            border-color: #5e3a3a;
-            box-shadow: 0 2px 0 #1d1214, 0 3px 5px rgba(0, 0, 0, .45);
-            opacity: .92;
-        }
-        .radar-site-btn.down:hover { filter: brightness(1.18); }
-        .radar-site-btn.down:active {
-            transform: translateY(2px);
-            box-shadow: 0 1px 0 #1d1214, 0 1px 2px rgba(0, 0, 0, .4);
-        }
-        /* Selected overrides the down look (an offline site can still be the active one). */
-        .radar-site-btn.down.selected {
-            color: #2a1300;
-            background: linear-gradient(#ffc070, #ff8a1a);
-            border-color: #944300;
-            opacity: 1;
-            transform: translateY(2px);
-            box-shadow: 0 1px 0 #944300, 0 1px 3px rgba(0, 0, 0, .4);
-        }
-
-        /* --- Secondary status "halo" (::after) ---------------------------------------
-           A thin ring sitting a few px out from the key, glowing the site's status color.
-           It's a transparent-interior border ring so it never covers the key face.
-           Order matters: 'down' overrides the default green, 'selected' overrides both. */
-        .radar-site-btn::after {
-            content: "";
-            position: absolute;
-            inset: -5px;
-            border-radius: 9px;
-            pointer-events: none;
-            /* available = accent-colored status halo, driven by the OS theme accent the host pushes
-               via setAccent (--radar-site-halo / --radar-site-halo-glow). Falls back to green until
-               the host pushes (e.g. if the accent push hasn't arrived yet). */
-            border: 1.5px solid var(--radar-site-halo, #57c75a);
-            box-shadow: 0 0 6px var(--radar-site-halo-glow, rgba(87, 199, 90, .55));
-            transition: border-color .15s ease, box-shadow .15s ease;
-        }
-        /* down = red halo */
-        .radar-site-btn.down::after {
-            border-color: #e05a5a;
-            box-shadow: 0 0 6px rgba(224, 90, 90, .55);
-        }
-        /* selected = NO small halo. The active site's "radar" is the big geographic range ring +
-           rotating sweep arm drawn on the MAP (radar.js), so the key carries no ring — only its
-           orange pressed-button look marks it as selected. */
-        .radar-site-btn.selected::after { display: none; }`;
+        .radar-site-btn.selected:hover { filter: brightness(1.03); }`;
     document.head.appendChild(siteStyle);
 }
 
-// Applies a marker's offline styling + tooltip from the current radarSiteOffline set.
+// Applies a marker's availability (dot color via the .offline class) + tooltip from the offline set.
 function applySiteStatus(el, id) {
-    const down = radarSiteOffline.has(id);
-    el.classList.toggle('down', down);
+    const off = radarSiteOffline.has(id);
+    el.classList.toggle('offline', off);
     const name = el.dataset.siteName || '';
-    el.title = name + (down ? ' · offline (no recent data)' : '');
+    el.title = name + (off ? ' · offline (no recent data)' : '');
 }
 
 // Provide the site list (as buttons). Each wrapper is the marker MapLibre positions; the inner
@@ -128,7 +97,10 @@ export function show(map, json) {
         el.className = 'radar-site-marker';
         const btn = document.createElement('div');
         btn.className = 'radar-site-btn';
-        btn.textContent = s.id;
+        const dot = document.createElement('span');
+        dot.className = 'radar-site-dot'; // availability: green (available) / red (.offline)
+        btn.appendChild(dot);
+        btn.appendChild(document.createTextNode(s.id));
         btn.dataset.siteName = s.name || '';
         el.appendChild(btn);
         if (!radarSitesVisible) el.style.display = 'none';
@@ -160,16 +132,10 @@ export function setStatus(json) {
     Object.keys(radarMarkers).forEach(function (k) { applySiteStatus(radarMarkers[k], k); });
 }
 
-// Sets the accent color driving the "available" status halo (the ::after ring), pushed by the host
-// from the OS theme accent so it matches the OverlayBar's accent drop-shadow (and re-tints live when
-// the OS accent/theme changes). `border` is a CSS color for the ring; `glow` a CSS color for its soft
-// box-shadow. Set as CSS custom properties on the root, so they apply to all markers (present and
-// future) and the down/red + selected/none halos are unaffected. Empty args leave a value unchanged.
-export function setAccent(border, glow) {
-    const root = document.documentElement;
-    if (border) root.style.setProperty('--radar-site-halo', border);
-    if (glow) root.style.setProperty('--radar-site-halo-glow', glow);
-}
+// No-op: the on-map markers no longer use the OS accent (the halo was removed — availability is a fixed
+// green/red DOT and selection is the inverted-light key). Kept so the host's setRadarSitesAccent shim
+// (MapService.SetRadarSiteAccentAsync → map.js) stays valid; the OverlayBar still uses the accent itself.
+export function setAccent(border, glow) { /* markers no longer use an accent halo */ }
 
 // Show/hide all site buttons. Independent of the radar layer — an active loop keeps rendering while
 // the markers are hidden. Iterate the marker objects (every marker), so we never miss a shared id.

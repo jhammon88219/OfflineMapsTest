@@ -133,7 +133,13 @@ function buildGates(radials, getAzimuth, siteLat, siteLon, colorFn) {
 // in km (one representative pair — uniform within a sweep). `unit`/`digits` drive the tooltip text.
 // NOTE: unlike the rendered geometry this is NOT thresholded/masked — the inspector reports the true
 // measured value at any gate that has data (e.g. dBZ below the display threshold).
-function buildGrid(radials, getAzimuth, scale, unit, digits) {
+// wantValues (default true) gates the HEAVY part: the Int16 values + Float32 azimuth arrays (the
+// per-gate inspector data, ~Int16 N×G per product per frame). The scalar range metadata
+// (firstGate/gateSize/nGates) is always cheap to compute and is what the range ring needs, so it's
+// returned regardless; the value arrays are built only when the inspector is on (see decodeAndBuild's
+// buildGrids). A metadata-only grid returns az:null / values:null.
+function buildGrid(radials, getAzimuth, scale, unit, digits, wantValues) {
+    if (wantValues === undefined) wantValues = true;
     if (!radials || !radials.length) return null;
     const N = radials.length;
     let G = 0, fg = NaN, gs = NaN;
@@ -145,6 +151,11 @@ function buildGrid(radials, getAzimuth, scale, unit, digits) {
         }
     }
     if (!G || !isFinite(fg) || !isFinite(gs) || !(gs > 0)) return null;
+
+    // Metadata-only (inspector off): skip the ~Int16 N×G allocation entirely. rangeMeters still works.
+    if (!wantValues) {
+        return { az: null, firstGate: fg, gateSize: gs, nGates: G, values: null, scale: scale, unit: unit, digits: digits };
+    }
 
     const az = new Float32Array(N);
     const values = new Int16Array(N * G);
@@ -168,7 +179,7 @@ function buildGrid(radials, getAzimuth, scale, unit, digits) {
 // Lowest-tilt reflectivity geometry (gates >= minDbz) + the inspector value grid. Reflectivity always
 // lives at the lowest elevation NUMBER present (the surveillance cut), which the C# extractor writes
 // first. Returns { geom, grid }: geom may be null (nothing above threshold) while grid still has data.
-function buildReflectivity(radar, siteLat, siteLon, minDbz) {
+function buildReflectivity(radar, siteLat, siteLon, minDbz, wantGrid) {
     const elevations = radar.listElevations();
     if (!elevations || !elevations.length) return { geom: null, grid: null };
     radar.setElevation(Math.min.apply(null, elevations));
@@ -178,7 +189,7 @@ function buildReflectivity(radar, siteLat, siteLon, minDbz) {
         if (dbz === null || dbz === undefined || dbz < minDbz) return null;
         return rampColor(REFLECTIVITY_RAMP, dbz);
     });
-    return { geom: geom, grid: buildGrid(radials, getAz, 10, REFLECTIVITY_RAMP.unit, 1) };
+    return { geom: geom, grid: buildGrid(radials, getAz, 10, REFLECTIVITY_RAMP.unit, 1, wantGrid) };
 }
 
 // The elevation (number) carrying velocity. In a split-cut precip VCP that's the Doppler
@@ -478,7 +489,7 @@ function dealiasSweepCore(radials, radar) {
 // Lowest-tilt base-velocity geometry (dealiased) + the inspector value grid (also from the DEALIASED
 // radials, so the inspected value matches the rendered pixel). Returns { geom, grid }; both null if
 // the volume carries no velocity.
-function buildVelocity(radar, siteLat, siteLon) {
+function buildVelocity(radar, siteLat, siteLon, wantGrid) {
     const elev = findVelocityElevation(radar);
     if (elev === null) return { geom: null, grid: null };
     radar.setElevation(elev);
@@ -489,7 +500,7 @@ function buildVelocity(radar, siteLat, siteLon) {
         if (v === null || v === undefined) return null;
         return rampColor(VELOCITY_RAMP, v);
     });
-    return { geom: geom, grid: buildGrid(dealiased, getAz, 10, VELOCITY_RAMP.unit, 1) };
+    return { geom: geom, grid: buildGrid(dealiased, getAz, 10, VELOCITY_RAMP.unit, 1, wantGrid) };
 }
 
 // Lowest-tilt correlation-coefficient (ρHV) geometry. CC is a dual-pol moment collected in the
@@ -501,7 +512,7 @@ function buildVelocity(radar, siteLat, siteLon) {
 // the whole domain with colorful speckle (RadarScope masks it the same way). We keep a CC gate only
 // where the co-located reflectivity gate is >= minDbz — aligned by RANGE, since CC and reflectivity
 // can use different gate geometry. The result shows CC exactly where the reflectivity product draws.
-function buildCorrelation(radar, siteLat, siteLon, minDbz) {
+function buildCorrelation(radar, siteLat, siteLon, minDbz, wantGrid) {
     const elevs = radar.listElevations();
     if (!elevs || !elevs.length) return { geom: null, grid: null };
     radar.setElevation(Math.min.apply(null, elevs));
@@ -521,7 +532,7 @@ function buildCorrelation(radar, siteLat, siteLon, minDbz) {
     });
     // The inspector grid uses the UNMASKED ρHV (ccR), so the cursor reads the true value anywhere
     // there's signal — not only where the reflectivity-masked geometry draws.
-    return { geom: geom, grid: buildGrid(ccR, getAz, 1000, CORRELATION_RAMP.unit, 2) };
+    return { geom: geom, grid: buildGrid(ccR, getAz, 1000, CORRELATION_RAMP.unit, 2, wantGrid) };
 }
 
 // Masks a moment's radials to only where the co-located reflectivity gate is >= minDbz (aligned by
@@ -627,7 +638,7 @@ export function decodeDowFrame(json, minDbz) {
         ? (rangeGrid.firstGate + rangeGrid.nGates * rangeGrid.gateSize) * 1000 : 0;
     const t1 = (typeof performance !== 'undefined') ? performance.now() : 0;
     return {
-        geom: geom, velGeom: velGeom, ccGeom: ccGeom,
+        geom: geom, velGeom: velGeom, ccGeom: ccGeom, velBuilt: true, gridsBuilt: true,
         reflGrid: reflGrid, velGrid: velGrid, ccGrid: ccGrid,
         rangeMeters: rangeMeters,
         decodeMs: Math.round(t1 - t0), buildMs: 0,
@@ -641,15 +652,27 @@ export function decodeDowFrame(json, minDbz) {
 // the reflectivity geometry (null when nothing's above threshold); velGeom is the velocity
 // geometry (null when the volume has no Doppler cut). Both have baked-in vertex colors, so the
 // host can toggle product instantly without re-decoding.
-export function decodeAndBuild(ab, siteLat, siteLon, minDbz) {
+//
+// buildVel (default true) gates the velocity build: velocity is the ONLY product that must dealias
+// (dealiasSweep — a region-based port, by far the priciest step per frame), so when the user isn't
+// on the Velocity product the host passes buildVel=false and we skip buildVelocity entirely. The
+// result carries velBuilt so the host knows a refl-only frame must be re-decoded before it can show
+// velocity (see radar.js setProduct). Reflectivity + CC are always built (cheap; CC has no dealias).
+export function decodeAndBuild(ab, siteLat, siteLon, minDbz, buildVel, buildGrids) {
+    if (buildVel === undefined) buildVel = true; // decode everything unless told otherwise
+    if (buildGrids === undefined) buildGrids = true;
     const bytes = ab.byteLength;
     return loadDecoder().then(function (dec) {
         const t0 = performance.now();
         const radar = new dec.Level2Radar(dec.Buffer.from(new Uint8Array(ab)));
         const t1 = performance.now();
-        const reflR = buildReflectivity(radar, siteLat, siteLon, minDbz);
-        const velR = buildVelocity(radar, siteLat, siteLon);
-        const ccR = buildCorrelation(radar, siteLat, siteLon, minDbz);
+        // buildGrids (default true) gates the per-gate inspector VALUE arrays — the host passes false
+        // when Inspect is off (the common case) so long loops don't retain ~Int16 N×G per product per
+        // frame. The range ring uses only the grid's scalar metadata, which is always computed, so it's
+        // unaffected. Re-decoded on demand when Inspect is toggled on (see radar.js setInspect).
+        const reflR = buildReflectivity(radar, siteLat, siteLon, minDbz, buildGrids);
+        const velR = buildVel ? buildVelocity(radar, siteLat, siteLon, buildGrids) : { geom: null, grid: null };
+        const ccR = buildCorrelation(radar, siteLat, siteLon, minDbz, buildGrids);
         const geom = reflR.geom, velGeom = velR.geom, ccGeom = ccR.geom;
         const t2 = performance.now();
         // Diagnostics: per-moment radial/azimuth-span/gate stats + the elevation NUMBERS present and
@@ -684,8 +707,11 @@ export function decodeAndBuild(ab, siteLat, siteLon, minDbz) {
         const rangeMeters = rangeGrid && isFinite(rangeGrid.firstGate) && isFinite(rangeGrid.gateSize)
             ? (rangeGrid.firstGate + rangeGrid.nGates * rangeGrid.gateSize) * 1000 : 0;
         return {
-            geom: geom, velGeom: velGeom, ccGeom: ccGeom,
-            reflGrid: reflR.grid, velGrid: velR.grid, ccGrid: ccR.grid, // inspector value grids
+            geom: geom, velGeom: velGeom, ccGeom: ccGeom, velBuilt: !!buildVel,
+            // Inspector value grids — only shipped when built (rangeMeters above already pulled the
+            // scalar extent from the metadata-only grid, so a null here doesn't affect the range ring).
+            reflGrid: buildGrids ? reflR.grid : null, velGrid: buildGrids ? velR.grid : null, ccGrid: buildGrids ? ccR.grid : null,
+            gridsBuilt: !!buildGrids,
             rangeMeters: rangeMeters,
             decodeMs: Math.round(t1 - t0), buildMs: Math.round(t2 - t1),
             radials: radials, gates: gates, bytes: bytes,

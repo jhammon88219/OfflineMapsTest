@@ -64,8 +64,29 @@ namespace OfflineMapsTest
 					return;
 				}
 
-				// Render-health signal from radar.js (blank / error / recovered / context lost).
-				if (type == "radarRender")
+					// Velocity build progress: how many loaded frames have their (lazily-built, dealiased)
+					// velocity geometry ready. Drives the "Building velocity N/M" readout and lets playback
+					// hold at the built frontier instead of stuttering into a still-decoding frame.
+					if (type == "radarBuildProgress")
+					{
+						var built = root.TryGetProperty("built", out var bEl) ? bEl.GetInt32() : 0;
+						var total = root.TryGetProperty("total", out var tEl) ? tEl.GetInt32() : 0;
+						bool[]? ready = null;
+						if (root.TryGetProperty("ready", out var rdEl) && rdEl.ValueKind == JsonValueKind.Array)
+						{
+							ready = new bool[rdEl.GetArrayLength()];
+							var ri = 0;
+							foreach (var e in rdEl.EnumerateArray())
+							{
+								ready[ri++] = e.ValueKind == JsonValueKind.True;
+							}
+						}
+						_viewModel.Radar.SetBuildProgress(built, total, ready);
+						return;
+					}
+
+					// Render-health signal from radar.js (blank / error / recovered / context lost).
+					if (type == "radarRender")
 				{
 					Services.RadarDiagnostics.JsRender(root);
 					return;
@@ -142,11 +163,15 @@ namespace OfflineMapsTest
 				if (type == "mapReady" && !_mapReady)
 				{
 					_mapReady = true;
-					await _viewModel.OnMapsReadyAsync();
+					// Push the theme accent (MapReady) BEFORE the VM's map-ready work, which creates the
+					// radar-site markers: their halo reads a CSS var, so setting it first means the markers
+					// render in the accent from the start instead of flashing the green fallback for the
+					// ~second OnMapsReadyAsync takes.
 					if (MapReady is not null)
 					{
 						await MapReady.Invoke();
 					}
+					await _viewModel.OnMapsReadyAsync();
 				}
 			}
 			catch (JsonException)

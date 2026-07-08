@@ -82,6 +82,11 @@ try {
         if (window.RadarLayer) window.RadarLayer.setProduct(map, product);
         postRampFor(product);
     };
+    // Speculatively build velocity in the background (host calls this once reflectivity has rendered),
+    // so a later switch to the Velocity product is instant.
+    window.prefetchRadarVelocity = function () {
+        if (window.RadarLayer) window.RadarLayer.prefetchVelocity();
+    };
     // Inspect mode: read the value under the cursor (RadarScope-style). Delegates to RadarLayer,
     // which tracks the mouse and posts {type:"radarInspect"} for the color-scale marker.
     window.setRadarInspect = function (on) {

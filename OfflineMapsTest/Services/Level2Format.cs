@@ -395,6 +395,40 @@ namespace OfflineMapsTest.Services
 			return $"VCP {vcp} · {(clearAir ? "clear-air" : "precip")} · 0.5°×{sweeps}{sails}";
 		}
 
+		// VCP + regime only (no sweep count) — the archive/replay mode line, where per-frame we read
+		// the VCP from the cached tilt's metadata but not (yet) the sweep count. Empty when the VCP
+		// isn't recognized, so the caller shows "—" rather than a bogus "VCP ?".
+		internal static string DescribeVcp(int vcp)
+		{
+			if (!IsKnownVcp(vcp))
+			{
+				return string.Empty;
+			}
+			return $"VCP {vcp} · {(ClearAirVcps.Contains(vcp) ? "clear-air" : "precip")}";
+		}
+
+		// Reads the scan mode from an ALREADY-EXTRACTED single-tilt buffer (a cached .V06: 24-byte
+		// AR2V header + decompressed records) — used for archive/replay frames, whose EnsureCachedAsync
+		// path never runs the live SelectLatestSweep. Treats the whole buffer (minus the 24-byte header)
+		// as one metadata "block": the leading metadata record's Message 5 sits at a 2432-byte stride
+		// from that offset, and both readers stop at the first radial (Message 31), so the real Message 5
+		// is found before any radial data. Returns (0,0) — rendered as "—" — for a raw/unparseable
+		// fallback buffer. `sweeps` is parsed too (designed SAILS count from Message 5) for the mode's
+		// second tier; refAngle is passed NaN here (no observed base angle handy on this path), which
+		// skips ReadSailsSweepsFromMetadata's reality-check and trusts the table.
+		internal static (int vcp, int sweeps) ReadModeFromExtractedTilt(byte[] tilt)
+		{
+			const int headerSize = 24;
+			if (tilt is null || tilt.Length <= headerSize)
+			{
+				return (0, 0);
+			}
+			var one = new List<(byte[] block, int elev)> { (tilt[headerSize..], 0) };
+			var vcp = ReadVcpFromMetadata(one);
+			var sweeps = ReadSailsSweepsFromMetadata(one, float.NaN);
+			return (vcp, sweeps);
+		}
+
 		// Builds a minimal uncompressed volume containing ONLY the lowest elevation's records.
 		// See the design notes in the previous revision: 24-byte header + decompressed LDM
 		// records up to the first elevation-2 record (records align to elevations, lowest
@@ -506,7 +540,19 @@ namespace OfflineMapsTest.Services
 						completedTilt = true; // crossed into a higher tilt -> tilt 1 fully scanned
 						break;
 					}
-					baseElev = elev; // same-angle split-cut Doppler companion -> keep it, advance marker
+					// A real split cut is only TWO cuts: the surveillance and its Doppler companion. Once we've
+						// kept the companion, ANOTHER elevation-number increase we can't confirm as the same
+						// angle (the angle byte at ICAO+24 reads NaN on some sites' blocks) is the next tilt —
+						// stop rather than keep piling on. Without this bound, a bad angle read ran the "base
+						// tilt" up to elev 4-5 and bloated the cache to 20-27 MB (slow to fetch + extract +
+						// JS-decode, and too big for the range prefix, forcing a full re-download). The lowest
+						// tilt is already complete here (both halves captured).
+						if (keptDoppler)
+						{
+							completedTilt = true;
+							break;
+						}
+						baseElev = elev; // first same-angle split-cut Doppler companion -> keep it, advance marker
 					keptDoppler = true;
 				}
 

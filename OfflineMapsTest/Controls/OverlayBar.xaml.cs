@@ -14,8 +14,8 @@ namespace OfflineMapsTest.Controls
 	/// drop shadow, the theme-aware surface, and the bottom-overlay collapse behavior. The host fills
 	/// <see cref="BarContent"/> with the actual controls, so section content is composed in MainWindow.
 	/// The show/hide state is pure view state and lives here, not on a view model.
-	/// (Named for what it is — a bottom overlay shell — not for what it hosts; the round play/scrub
-	/// control it contains is the actual "transport control", <see cref="RadialTransport"/>.)
+	/// (Named for what it is — a bottom overlay shell — not for what it hosts; the actual radar
+	/// transport lives in the RadarControls section it hosts.)
 	/// </summary>
 	public sealed partial class OverlayBar : UserControl
 	{
@@ -49,6 +49,17 @@ namespace OfflineMapsTest.Controls
 
 		public static readonly DependencyProperty BarContentProperty =
 			DependencyProperty.Register(nameof(BarContent), typeof(object), typeof(OverlayBar), new PropertyMetadata(null));
+
+		/// <summary>The content floating just ABOVE the bar (filled by the host — the temporal settings
+		/// cards). Nothing draws when it's null/collapsed, so the tab sits flush above the bar as before.</summary>
+		public object? CardContent
+		{
+			get => GetValue(CardContentProperty);
+			set => SetValue(CardContentProperty, value);
+		}
+
+		public static readonly DependencyProperty CardContentProperty =
+			DependencyProperty.Register(nameof(CardContent), typeof(object), typeof(OverlayBar), new PropertyMetadata(null));
 
 		/// <summary>Whether the bar is shown (the pull-tab toggles it). Pure view state.</summary>
 		public bool IsOverlayBarVisible

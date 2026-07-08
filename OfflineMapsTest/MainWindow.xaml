@@ -21,30 +21,29 @@
         <controls:WebView2 x:Name="MainMapWebView"/>
 
         <!-- Overlay bar: a chrome-only shell (Controls/OverlayBar) that floats as a bottom
-             overlay. Its content is composed here in three zones — left: temporal-category toggles;
-             center: loop controls + product; right: contextual per-feature options buttons. -->
+             overlay. CardContent floats a feature's settings card ABOVE the bar; BarContent holds the
+             bar itself — left: temporal split-toggles; center: loop controls + product. -->
         <ctl:OverlayBar VerticalAlignment="Bottom">
+            <!-- Floating settings cards (Past / Now / Fore), shown above the bar when a cog is clicked. -->
+            <ctl:OverlayBar.CardContent>
+                <sections:TemporalCards ViewModel="{x:Bind ViewModel}"/>
+            </ctl:OverlayBar.CardContent>
             <ctl:OverlayBar.BarContent>
                 <!-- Single overlay cell: RadarControls STRETCHES to full bar width and centers its own
-                     dial at window-center (its internal symmetric star grid does the centering); the
-                     temporal toggles (far-left) and context options (far-right) float over the empty
-                     edges. Overlaying them — rather than giving them their own grid columns — means the
-                     dial's position is driven purely by RadarControls, so the edge sections can't shift
-                     it and the right-hand site-details can grow rightward into empty space without ever
-                     nudging the centered dial. -->
+                     transport at window-center (its internal * | Auto | * grid does the centering); the
+                     temporal toggles float OVER the left empty edge in the same cell. Overlaying them —
+                     rather than giving them their own grid columns — means the transport's position is
+                     driven purely by RadarControls, so the edge section can't shift it. Per-feature
+                     options now live in the floating settings cards (CardContent), not a right region. -->
                 <Grid>
-                    <!-- Center: the merged radar transport + display controls (drives live AND replay). -->
+                    <!-- Full-width: the whole radar console (transport + display + site), self-centering. -->
                     <sections:RadarControls HorizontalAlignment="Stretch"
                                             VerticalAlignment="Center"
                                             ViewModel="{x:Bind ViewModel.Radar}"/>
-                    <!-- Left: temporal-category enable toggles. -->
+                    <!-- Left: temporal split-toggles (feature + settings cog), overlaid on the left edge. -->
                     <sections:TemporalToggles HorizontalAlignment="Left"
                                               VerticalAlignment="Center"
                                               ViewModel="{x:Bind ViewModel}"/>
-                    <!-- Right: contextual options for each enabled feature. -->
-                    <sections:ContextBar HorizontalAlignment="Right"
-                                         VerticalAlignment="Center"
-                                         ViewModel="{x:Bind ViewModel}"/>
                 </Grid>
             </ctl:OverlayBar.BarContent>
         </ctl:OverlayBar>

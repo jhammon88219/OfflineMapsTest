@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -91,6 +92,32 @@ namespace OfflineMapsTest.Services
 				.ToList();
 		}
 
+		// Size of the leading range-request used to grab just the lowest tilt of a raw (modern) volume.
+		// The 0.5° cut sits at the FILE START (metadata + surveillance + its Doppler companion + the
+		// first radial of the next tilt, which proves the tilt is complete), so a few MB usually holds
+		// it. 5 MB clears the biggest super-res split-cut tilts while being a fraction of a full
+		// ~10-30 MB volume; if a tilt somehow doesn't fit, EnsureCachedAsync falls back to a full GET.
+		private const int LowestTiltPrefixBytes = 5 * 1024 * 1024;
+
+		// Scan-mode line for an archive/replay frame, parsed from its cached single-tilt buffer's leading
+		// metadata — the live SelectLatestSweep path doesn't run for archive frames, so this is how a
+		// past-event loop gets its scan readout. Emits the SAME format as live ("VCP 212 · precip ·
+		// 0.5°×3 · SAILS/MRLE ×2"), including the designed SAILS sweep count from the Message 5 elevation
+		// table; falls back to VCP + regime alone if that count didn't parse. Null (rendered as "—") when
+		// the VCP itself can't be read (a raw-fallback or legacy volume). (A 2011-era VCP 12 correctly
+		// reads 0.5°×1 — no SAILS existed pre-2014 — which the UI shows as just "0.5°".)
+		private static string? ModeTextFromTilt(byte[] tilt)
+		{
+			var (vcp, sweeps) = ReadModeFromExtractedTilt(tilt);
+			if (!IsKnownVcp(vcp))
+			{
+				return null;
+			}
+			// Clamp mirrors the live path (SAILS tops out at ×3 = 4 base scans); an out-of-range count
+			// means a misparse, so drop to VCP + regime rather than show a bogus "0.5°×9".
+			return sweeps is >= 1 and <= 6 ? DescribeMode(vcp, sweeps) : DescribeVcp(vcp);
+		}
+
 		public async Task<RadarVolume?> EnsureCachedAsync(RadarSite site, string key, CancellationToken cancellationToken = default)
 		{
 			var time = ParseVolumeTime(key) ?? DateTimeOffset.UtcNow;
@@ -100,42 +127,84 @@ namespace OfflineMapsTest.Services
 			// Reuse a volume we've already fetched + extracted.
 			if (File.Exists(cacheFile))
 			{
-				return new RadarVolume(localUrl, site, time);
+				// Re-derive the scan mode from the cached bytes (parse off the UI thread) so a replay
+				// reload / site revisit still shows the VCP even though extraction is skipped.
+				string? cachedMode = null;
+				try
+				{
+					var cachedBytes = await File.ReadAllBytesAsync(cacheFile, cancellationToken);
+					cachedMode = await Task.Run(() => ModeTextFromTilt(cachedBytes), cancellationToken);
+				}
+				catch (OperationCanceledException) { throw; }
+				catch { /* mode is best-effort; a bad read just shows "—" */ }
+				return new RadarVolume(localUrl, site, time, cachedMode);
 			}
 
 			try
 			{
-				byte[] raw;
-				using (var response = await _http.GetAsync(BucketBase + key, HttpCompletionOption.ResponseHeadersRead, cancellationToken))
-				{
-					response.EnsureSuccessStatusCode();
-					raw = await response.Content.ReadAsByteArrayAsync(cancellationToken);
-				}
-
 				// Archived volumes (older dates) are gzip-wrapped (key ends ".gz"); the underlying
 				// bytes are the same AR2V format the extractor expects, so gunzip first. Recent volumes
-				// are stored raw, so this only runs for the historical Past Event Viewer fetches.
+				// are stored raw, so the gunzip only runs for the historical Past Event Viewer fetches.
 				var isGz = key.EndsWith(".gz", StringComparison.Ordinal);
 
-				// Extract only the lowest tilt on a worker thread; fall back to raw on failure.
-				var toWrite = await Task.Run(() =>
+				byte[]? toWrite = null;
+
+				// FAST PATH (raw/modern volumes): the lowest tilt lives at the START of the file, so
+				// range-GET just a leading prefix and extract from that — a few MB instead of the whole
+				// ~10-30 MB volume, cutting download time for both first paint and every backfill frame.
+				// Only when that prefix doesn't already hold a COMPLETE tilt (completedTilt) do we fall
+				// back to the full download below. (.gz historical/legacy files aren't range-friendly — a
+				// partial gzip stream can't be relied on — so they always take the full path.)
+				if (!isGz)
 				{
-					try
+					var prefix = await TryGetRangeAsync(key, LowestTiltPrefixBytes, cancellationToken);
+					if (prefix is not null)
 					{
-						var data = isGz ? Gunzip(raw) : raw;
-						return TryExtractLowestTilt(data, site.Id) ?? data;
+						toWrite = await Task.Run(() =>
+						{
+							try
+							{
+								var tilt = TryExtractLowestTilt(prefix, site.Id, out var completedTilt);
+								return completedTilt ? tilt : null; // truncated prefix -> trigger a full download
+							}
+							catch
+							{
+								return null;
+							}
+						}, cancellationToken);
 					}
-					catch (Exception ex)
+				}
+
+				// FULL DOWNLOAD: a .gz file, a prefix too short to hold the whole tilt, or a failed range
+				// request. Extract only the lowest tilt on a worker thread; fall back to raw on failure.
+				if (toWrite is null)
+				{
+					byte[] raw;
+					using (var response = await _http.GetAsync(BucketBase + key, HttpCompletionOption.ResponseHeadersRead, cancellationToken))
 					{
-						System.Diagnostics.Debug.WriteLine($"[radar] {site.Id} extract failed, caching raw: {ex.Message}");
-						return raw;
+						response.EnsureSuccessStatusCode();
+						raw = await response.Content.ReadAsByteArrayAsync(cancellationToken);
 					}
-				}, cancellationToken);
+					toWrite = await Task.Run(() =>
+					{
+						try
+						{
+							var data = isGz ? Gunzip(raw) : raw;
+							return TryExtractLowestTilt(data, site.Id) ?? data;
+						}
+						catch (Exception ex)
+						{
+							System.Diagnostics.Debug.WriteLine($"[radar] {site.Id} extract failed, caching raw: {ex.Message}");
+							return raw;
+						}
+					}, cancellationToken);
+				}
 
 				var temp = cacheFile + ".tmp";
 				await File.WriteAllBytesAsync(temp, toWrite, cancellationToken);
 				File.Move(temp, cacheFile, overwrite: true);
-				return new RadarVolume(localUrl, site, time);
+				var mode = ModeTextFromTilt(toWrite); // VCP + regime for the archive/replay scan line
+				return new RadarVolume(localUrl, site, time, mode);
 			}
 			catch (OperationCanceledException)
 			{
@@ -148,12 +217,46 @@ namespace OfflineMapsTest.Services
 			}
 		}
 
+		// GETs the first <paramref name="count"/> bytes of an S3 object via a Range request. Returns the
+		// bytes (FEWER than count if the object is smaller — S3 then returns the whole object), or null
+		// if the range request failed (server didn't honor it, network error) so the caller can fall back
+		// to a full GET. 206 = partial (range honored); 200 = whole object (small file) — both usable.
+		private async Task<byte[]?> TryGetRangeAsync(string key, int count, CancellationToken ct)
+		{
+			try
+			{
+				using var req = new HttpRequestMessage(HttpMethod.Get, BucketBase + key);
+				req.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(0, count - 1);
+				using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
+				if (resp.StatusCode != System.Net.HttpStatusCode.PartialContent &&
+					resp.StatusCode != System.Net.HttpStatusCode.OK)
+				{
+					return null;
+				}
+				return await resp.Content.ReadAsByteArrayAsync(ct);
+			}
+			catch (OperationCanceledException)
+			{
+				throw;
+			}
+			catch
+			{
+				return null; // fall back to a full GET
+			}
+		}
+
 		// Safety cap on chunks decoded per live build. A plain volume is ~67 chunks, but a SAILS
 		// precip VCP (extra 0.5° re-scans mid-volume) runs well past 90 — capping at 90 froze the
 		// in-progress volume before its latest sweep's Doppler completed (the stuck partial-velocity
 		// wedge). 160 covers a SAILS-heavy VCP 12/212/215 volume; decode stays cheap (incremental —
 		// only NEW chunks are pulled/decompressed each poll).
 		private const int LiveChunkCap = 160;
+
+		// Live-frame build was the slowest radar op (~8-12 s) because each chunk was downloaded AND
+		// bzip2-decoded serially — a fresh volume is dozens-to-hundreds of separate S3 GETs. They're
+		// independent (order-independent: blocks are keyed by sequence), so overlap the round-trips +
+		// the CPU-bound decode across this many workers, collapsing the build to network/decode-bound.
+		private const int LiveDownloadConcurrency = 8;
 
 		// Per-volume decoded-chunk cache so repeated polls of the same in-progress volume only
 		// download + decompress the NEW chunks (bounds bandwidth to ~one volume's worth). Keyed
@@ -280,50 +383,55 @@ namespace OfflineMapsTest.Services
 			// Download + decompress only chunks we don't already have. Each chunk is one LDM
 			// record: S = [24-byte header][control word][BZh…], I/E = [control word][BZh…].
 			var icao = System.Text.Encoding.ASCII.GetBytes(site.Id);
-			var added = 0;
-			foreach (var c in chunks)
+
+			// Pick the missing chunks to pull this pass, in sequence order, bounded by the cap (the
+			// cross-poll cache in `blocks` already holds prior polls' chunks). These are independent,
+			// so we fetch + decode them in PARALLEL below instead of one HTTP round-trip at a time.
+			var toFetch = new List<(string key, int seq, char kind)>();
+			for (int i = 0; i < chunks.Count && blocks.Count + toFetch.Count < LiveChunkCap; i++)
 			{
-				if (blocks.Count >= LiveChunkCap)
-				{
-					break;
-				}
-				if (blocks.ContainsKey(c.seq))
-				{
-					continue;
-				}
-				ct.ThrowIfCancellationRequested();
+				if (!blocks.ContainsKey(chunks[i].seq)) toFetch.Add(chunks[i]);
+			}
 
-				byte[] bytes;
-				using (var resp = await _http.GetAsync(ChunksBase + c.key, HttpCompletionOption.ResponseHeadersRead, ct))
+			// Fetch + bzip2-decode in parallel (bounded). Results land in a thread-safe bag and the
+			// S chunk's 24-byte header is captured; the SortedDictionary `blocks` is NOT thread-safe,
+			// so all mutation of it happens AFTER the parallel batch, back on this thread.
+			var results = new ConcurrentBag<(int seq, byte[] block, int elev)>();
+			byte[]? parsedHeader = null;
+			var headerVanished = false;
+			await Parallel.ForEachAsync(toFetch,
+				new ParallelOptions { MaxDegreeOfParallelism = LiveDownloadConcurrency, CancellationToken = ct },
+				async (c, token) =>
 				{
-					if (!resp.IsSuccessStatusCode)
+					byte[] bytes;
+					using (var resp = await _http.GetAsync(ChunksBase + c.key, HttpCompletionOption.ResponseHeadersRead, token))
 					{
-						if (c.kind == 'S')
+						if (!resp.IsSuccessStatusCode)
 						{
-							return null; // header vanished mid-read; bail
+							if (c.kind == 'S') headerVanished = true; // header chunk gone -> bail after the batch
+							return; // a later chunk expired; use what we have
 						}
-						continue; // a later chunk expired; use what we have
+						bytes = await resp.Content.ReadAsByteArrayAsync(token);
 					}
-					bytes = await resp.Content.ReadAsByteArrayAsync(ct);
-				}
 
-				var isS = c.kind == 'S';
-				if (isS && bytes.Length >= 24)
-				{
-					header = bytes[..24];
-					if (useCache)
-					{
-						_liveHeader = header;
-					}
-				}
+					var isS = c.kind == 'S';
+					if (isS && bytes.Length >= 24) parsedHeader = bytes[..24]; // single S chunk -> no race
 
-				var block = await Task.Run(() => DecompressChunk(bytes, isS), ct);
-				if (block is null)
-				{
-					continue;
-				}
-				blocks[c.seq] = (block, ElevationOf(block, icao));
-				added++;
+					var block = DecompressChunk(bytes, isS);
+					if (block is null) return;
+					results.Add((c.seq, block, ElevationOf(block, icao)));
+				});
+
+			// Header vanished mid-read and we have no cached one -> can't decode (matches the old bail).
+			if (headerVanished && header is null && parsedHeader is null) return null;
+
+			// Merge the parallel results into the (possibly shared) block map on this thread.
+			foreach (var r in results) blocks[r.seq] = (r.block, r.elev);
+			var added = results.Count;
+			if (parsedHeader is not null)
+			{
+				header = parsedHeader;
+				if (useCache) _liveHeader = header;
 			}
 
 			if (header is null)

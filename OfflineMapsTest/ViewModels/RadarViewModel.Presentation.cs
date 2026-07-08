@@ -51,8 +51,13 @@ namespace OfflineMapsTest.ViewModels
 				// Show the displayed frame's time as soon as IT is available (the newest frame
 				// loads first, ~sub-second) rather than waiting for the whole loop to decode.
 				var t = (_currentFrameIndex >= 0 && _currentFrameIndex < _frameTimes.Length) ? _frameTimes[_currentFrameIndex] : null;
-				if (t is { } x) return x.ToLocalTime().ToString("h:mm tt");
-				return _frameCount > 0 ? $"Loading {_readyCount}/{_frameCount}…" : "Loading…";
+				// Replay frames need the date — "5:00 PM" is ambiguous on a historical event; a live
+				// loop is obviously today, so it stays time-only.
+				if (t is { } x)
+					return IsPastEventMode
+						? x.ToLocalTime().ToString("h:mm tt · MMM d, yyyy")
+						: x.ToLocalTime().ToString("h:mm tt");
+				return string.Empty; // no "loading" text; the segmented scrubber shows load progress
 			}
 		}
 
@@ -83,19 +88,77 @@ namespace OfflineMapsTest.ViewModels
 			get
 			{
 				if (_selectedRadarOption?.Site is null) return string.Empty;
+				// Replay has no live poll to fill _liveModeText, so read the DISPLAYED frame's own mode
+				// (VCP + regime parsed from its cached tilt). Live loops keep the single poll value,
+				// which carries the fuller "0.5°×N · SAILS" detail across all frames.
+				if (IsPastEventMode)
+				{
+					var m = (_currentFrameIndex >= 0 && _currentFrameIndex < _frameModes.Length)
+						? _frameModes[_currentFrameIndex] : null;
+					return m ?? (_isLoopReady ? "—" : "loading…");
+				}
 				return _liveModeText ?? (_isLoopReady ? "—" : "loading…");
 			}
 		}
 
-		/// <summary>How old the freshest available frame is, e.g. "2 min ago" / "66 min ago".</summary>
+		// Velocity build progress, pushed from radar.js (radarBuildProgress). Velocity geometry is built
+		// lazily (it's the one product that must dealias — ~1.5 s/frame on big super-res volumes), so on a
+		// switch to Velocity the loop fills in over a few seconds. _velReady[i] = frame i's velocity is
+		// built; only meaningful while Velocity is selected (refl/CC are always ready). It drives BOTH the
+		// scrubber's per-cell fill (via RefreshSegmentReadiness) and playback's built-frontier hold, so the
+		// build shows the same way as any other product's load — no separate textual readout.
+		private bool[] _velReady = Array.Empty<bool>();
+
+		/// <summary>Receives the velocity build state from the WebView. Refreshes the scrubber cells so the
+		/// frames re-fill as their velocity dealiases; playback also reads it. <paramref name="ready"/> is
+		/// per-frame (may be null).</summary>
+		public void SetBuildProgress(int built, int total, bool[]? ready)
+		{
+			_velReady = ready ?? Array.Empty<bool>();
+			RefreshSegmentReadiness();
+		}
+
+		// Whether frame idx is ready to display for the ACTIVE product. Velocity is built lazily, so a
+		// not-yet-dealiased frame isn't ready; reflectivity/CC are always built. Missing/out-of-range
+		// progress info returns true so playback never stalls on absent data.
+		private bool IsFrameDisplayReady(int idx)
+		{
+			if (_radarProductIndex != 1) return true;      // reflectivity / CC are always built
+			if (_velReady.Length == 0) return true;        // no progress pushed yet — don't stall
+			if (idx < 0 || idx >= _velReady.Length) return true;
+			return _velReady[idx];
+		}
+
+		/// <summary>How old the freshest available frame is, e.g. "2 min ago" / "1 hr 6 min ago".
+		/// Uses the two largest non-zero units so a historical replay frame reads "13 yr 2 mo ago"
+		/// instead of an unreadable ~7,000,000-minute count.</summary>
 		public string RadarAgeText
 		{
 			get
 			{
 				if (NewestFrameTime() is not { } t) return "—";
-				var mins = (DateTimeOffset.Now - t).TotalMinutes;
-				return mins < 1 ? "just now" : $"{mins:0} min ago";
+				var span = DateTimeOffset.Now - t;
+				return span.TotalMinutes < 1 ? "just now" : $"{FormatAge(span)} ago";
 			}
+		}
+
+		// Renders a TimeSpan as its two largest non-zero units (yr/mo/day/hr/min). Month/year
+		// lengths are averaged (30.44 / 365.25 days) — fine for a fuzzy "ago" readout.
+		private static string FormatAge(TimeSpan span)
+		{
+			double totalDays = span.TotalDays;
+			int years = (int)(totalDays / 365.25);
+			double remDays = totalDays - years * 365.25;
+			int months = (int)(remDays / 30.44);
+			int days = (int)(remDays - months * 30.44);
+
+			var parts = new (int Value, string Unit)[]
+			{
+				(years, "yr"), (months, "mo"), (days, "day"), (span.Hours, "hr"), (span.Minutes, "min"),
+			};
+			var shown = parts.SkipWhile(p => p.Value == 0).Take(2).Where(p => p.Value > 0);
+			var text = string.Join(" ", shown.Select(p => $"{p.Value} {p.Unit}"));
+			return text.Length == 0 ? "just now" : text;
 		}
 
 		/// <summary>Raw age of the freshest frame in minutes (null when no frame yet). Drives the
@@ -112,7 +175,9 @@ namespace OfflineMapsTest.ViewModels
 				var oldest = _frameTimes.Length > 0 ? _frameTimes[0] : null;
 				var newest = (_archiveCount - 1 < _frameTimes.Length) ? _frameTimes[_archiveCount - 1] : null;
 				static string L(DateTimeOffset? x) => x?.ToLocalTime().ToString("h:mm tt") ?? "—";
-				return $"{L(oldest)} – {L(newest)} · {_frameCount} frames";
+				// Suffix the event date in replay so the time-only span isn't ambiguous on a past event.
+				var date = IsPastEventMode && newest is { } n ? $" · {n.ToLocalTime():MMM d, yyyy}" : string.Empty;
+				return $"{L(oldest)} – {L(newest)} · {_frameCount} frames{date}";
 			}
 		}
 

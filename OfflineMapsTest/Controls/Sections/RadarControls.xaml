@@ -1,51 +1,66 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- RadarControls — the merged center section of the transport bar (loop transport + product were
-     recombined onto one view/one RadarViewModel): the radar display controls (product, tilt,
-     show/hide sites) stacked to the LEFT of the round RadialTransport dial, and the selected-site
-     info + frame time + scan mode stacked to the RIGHT of it. All bound to RadarViewModel. -->
+<!-- RadarControls — the whole radar console in one control (one RadarViewModel). Three zones laid out
+     entirely with Grids (no StackPanels):
+
+       DISPLAY (left)  |  TRANSPORT (center)  |  SITE (right)
+
+     Centering guarantee ("nothing shifts it, not even itself"): the root is a * | Auto | * grid, so the
+     center Auto column — the transport cluster — is pinned to the exact horizontal midpoint of whatever
+     width this control is given (the full bar, under the show/hide tab). The two * columns split the
+     remaining space EQUALLY, so the transport can't move regardless of what the sides show; the Play
+     button sits dead-center of the transport, so it lands directly under the tab. The Display cluster
+     right-aligns against the transport and the Site cluster left-aligns against it (each a fixed width),
+     so neither a long site name nor a wide combo can nudge the center. All bound to RadarViewModel. -->
 <UserControl x:Class="OfflineMapsTest.Controls.Sections.RadarControls"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:ctl="using:OfflineMapsTest.Controls"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:controls="using:OfflineMapsTest.Controls"
+             xmlns:vm="using:OfflineMapsTest.ViewModels"
              mc:Ignorable="d">
-    
+
     <UserControl.Resources>
         <x:Double x:Key="RightClusterFontSize">18</x:Double>
     </UserControl.Resources>
-    
-    <!-- This control STRETCHES to the full bar width, and the dial lives in the center Auto column
-         flanked by two EQUAL-STAR columns — so the dial is pinned to the exact horizontal midpoint of
-         the bar (== window-center, directly under the show/hide tab) regardless of what the sides show.
-         The left cluster right-aligns against the dial at a fixed width; the right cluster left-aligns
-         against the dial and, being Auto, grows ONLY rightward into the empty star space — it can widen
-         (bigger fonts, long site names) without ever nudging the centered dial. -->
-    <Grid ColumnSpacing="35" HorizontalAlignment="Stretch">
+
+    <!-- Root: * | Auto | * — the Auto (transport) column is centered; the two * columns take the rest. -->
+    <Grid HorizontalAlignment="Stretch"
+          VerticalAlignment="Center"
+          ColumnSpacing="28">
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="*"/>    <!-- left star: fills to window edge; left cluster hugs the dial -->
-            <ColumnDefinition Width="Auto"/> <!-- center: the transport dial (always window-centered) -->
-            <ColumnDefinition Width="*"/>    <!-- right star: fills to window edge; right cluster grows into it -->
+            <ColumnDefinition Width="*"/>    <!-- left space; Display cluster hugs the transport -->
+            <ColumnDefinition Width="Auto"/> <!-- center: transport (always midpoint-pinned) -->
+            <ColumnDefinition Width="*"/>    <!-- right space; Site cluster grows into it -->
         </Grid.ColumnDefinitions>
 
-        <!-- Left of the dial: radar display controls, stacked vertically. Fixed width + right-aligned so
-             it sits just left of the centered dial (its width is the dial's left counterweight). The color
-             bar and both button rows stretch to this width; since the right column (Tilt/Inspect) is a
-             fixed 88px, widening here grows only the color bar and the Product/Sites (*) column. -->
-        <StackPanel Grid.Column="0"
-                    Width="345"
-                    HorizontalAlignment="Right"
-                    Spacing="8"
-                    VerticalAlignment="Center">
+        <!-- ============================ DISPLAY (left of transport) ============================
+             Color-scale legend, Product/Tilt, and Sites/Inspect, stacked in Grid rows. Right-aligned at a
+             fixed width so it counterweights the transport without ever changing the center. -->
+        <Grid Grid.Column="0"
+              HorizontalAlignment="Right"
+              VerticalAlignment="Center"
+              Width="240"
+              RowSpacing="8">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/> <!-- legend block -->
+                <RowDefinition Height="Auto"/> <!-- Product / Tilt -->
+                <RowDefinition Height="Auto"/> <!-- Sites / Inspect -->
+            </Grid.RowDefinitions>
+
             <!-- Color-scale legend for the selected product (Reflectivity / Velocity / CC). Generated from
                  the ramp the WebView pushes (radar-ramps.js) so it always matches the painted gates. The
                  footprint is ALWAYS present (not gated on HasColorScale): before a ramp is known a muted
-                 "ghost" bar holds the width so the left cluster doesn't jump when the real ramp fills in.
-                 Sits at the top of the left cluster, spanning its full width, above the comboboxes. -->
-            <StackPanel Spacing="4">
+                 "ghost" bar holds the width so the left cluster doesn't jump when the real ramp fills in. -->
+            <Grid Grid.Row="0" RowSpacing="4">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/> <!-- bar + inspect tick -->
+                    <RowDefinition Height="Auto"/> <!-- numerical scale ticks -->
+                </Grid.RowDefinitions>
+
                 <!-- Bar + inspect tick share one cell; the tick is placed by proportional star columns
                      (InspectLeftStar/RightStar) so it tracks the value regardless of the bar's width. -->
-                <Grid Height="16">
+                <Grid Grid.Row="0" Height="16">
                     <!-- Ghost placeholder: shown only until a real ramp is known, reserving the bar's size. -->
                     <Border Height="12"
                             VerticalAlignment="Center"
@@ -80,7 +95,7 @@
 
                 <!-- Numerical scale for the ramp: low / mid / high tick values under the bar. The high
                      tick also carries the unit (dBZ / mph / ρHV) so the reader knows what the numbers are. -->
-                <Grid>
+                <Grid Grid.Row="1">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="*"/>
@@ -102,16 +117,16 @@
                                HorizontalAlignment="Right"
                                Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
                 </Grid>
-            </StackPanel>
+            </Grid>
 
-            <!-- Product + Tilt share one row. The two rows below (Product/Tilt and Sites/Inspect) use the
-                 SAME column split (* + 88) so Product lines up with the Sites button and Tilt with Inspect. -->
-            <Grid ColumnSpacing="8">
+            <!-- Product + Tilt share one row (equal columns). -->
+            <Grid Grid.Row="1" ColumnSpacing="8">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="88"/>
+                    <ColumnDefinition Width="*"/>
                 </Grid.ColumnDefinitions>
                 <ComboBox Grid.Column="0"
+                          Style="{StaticResource NoBackgroundComboBoxStyle}"
                           HorizontalAlignment="Stretch"
                           SelectedIndex="{x:Bind ViewModel.RadarProductIndex, Mode=TwoWay}">
                     <ComboBoxItem Content="Reflectivity"/>
@@ -119,6 +134,7 @@
                     <ComboBoxItem Content="Correlation Coefficient"/>
                 </ComboBox>
                 <ComboBox Grid.Column="1"
+                          Style="{StaticResource NoBackgroundComboBoxStyle}"
                           HorizontalAlignment="Stretch"
                           IsEnabled="False"
                           SelectedIndex="0"
@@ -126,12 +142,12 @@
                     <ComboBoxItem Content="0.5&#176;"/>
                 </ComboBox>
             </Grid>
-            <!-- Show/hide sites + Inspect share one row, using the SAME * + 88 split as the Product/Tilt
-                 row above so Sites lines up under Product and Inspect under Tilt. -->
-            <Grid ColumnSpacing="8">
+
+            <!-- Show/hide sites + Inspect share one row (equal columns). -->
+            <Grid Grid.Row="2" ColumnSpacing="8">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="88"/>
+                    <ColumnDefinition Width="*"/>
                 </Grid.ColumnDefinitions>
                 <Button Grid.Column="0"
                         HorizontalAlignment="Stretch"
@@ -144,30 +160,153 @@
                               IsChecked="{x:Bind ViewModel.IsInspecting, Mode=TwoWay}"
                               ToolTipService.ToolTip="Read the value under the cursor on the map, marked live on the color scale"/>
             </Grid>
-        </StackPanel>
+        </Grid>
 
-        <!-- Center: round transport dial (play/stop + ring scrubber). -->
-        <ctl:RadialTransport Grid.Column="1"
-                             ViewModel="{x:Bind ViewModel}"/>
+        <!-- ============================ TRANSPORT (center) ============================
+             Play is pinned to the EXACT window midpoint and nothing shifts it: the root centers this Auto
+             column between two equal * columns, and the button row is symmetric — the frame count (left)
+             and time (right) sit in EQUAL-width columns flanking prev/play/next, so neither can nudge Play.
+             The segmented scrubber spans the same width, so it's centered on the midpoint too.
+             Row 0: x/x · prev · play · next · time. Row 1: segmented scrubber (its per-cell fill IS the
+             load indicator for EVERY product — reflectivity decode and velocity dealias alike). -->
+        <Grid Grid.Column="1"
+              Width="360"
+              VerticalAlignment="Center"
+              RowSpacing="8">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/> <!-- x/x · prev · play · next · time -->
+                <RowDefinition Height="Auto"/> <!-- segmented scrubber -->
+            </Grid.RowDefinitions>
 
-        <!-- Right of the dial: a labeled property list (site / time / scan / tilt). Capped at MaxWidth=300
-             so it grows rightward into the empty star space only up to that width — never wider. -->
-        <StackPanel Grid.Column="2"
-                    HorizontalAlignment="Left"
-                    VerticalAlignment="Center"
-                    Spacing="6">
+            <!-- Button row. The two 84px side columns are EQUAL, so Play (center column) lands on the exact
+                 midpoint regardless of how wide the count / time text is. -->
+            <Grid Grid.Row="0" ColumnSpacing="12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="84"/>   <!-- frame count (right-aligned) -->
+                    <ColumnDefinition Width="Auto"/> <!-- prev -->
+                    <ColumnDefinition Width="Auto"/> <!-- play -->
+                    <ColumnDefinition Width="Auto"/> <!-- next -->
+                    <ColumnDefinition Width="84"/>   <!-- time (left-aligned) == count col, keeps Play centered -->
+                </Grid.ColumnDefinitions>
+
+                <!-- Frame N/M (current / total), left of the buttons. -->
+                <TextBlock Grid.Column="0"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center"
+                           Text="{x:Bind FrameCountText(ViewModel.CurrentFrameIndex, ViewModel.MaxFrameIndex), Mode=OneWay}"
+                           FontSize="20"
+                           Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                <!-- Previous Frame Button -->
+                <Button Grid.Column="1"
+                        Style="{StaticResource TransportButtonStyle}"
+                        Width="42"
+                        Height="42"
+                        Click="OnPrevClick"
+                        IsEnabled="{x:Bind ViewModel.IsLoopReady, Mode=OneWay}"
+                        ToolTipService.ToolTip="Previous frame">
+                    <FontIcon Glyph="&#xE892;" 
+                              FontSize="16"/>
+                </Button>
+                <!-- Play/Stop Button -->
+                <Button Grid.Column="2"
+                        Style="{StaticResource TransportButtonStyle}"
+                        Width="60"
+                        Height="60"
+                        Click="OnPlayStopClick"
+                        IsEnabled="{x:Bind ViewModel.IsLoopReady, Mode=OneWay}"
+                        ToolTipService.ToolTip="Play / stop (stop returns to the newest frame)">
+                    <FontIcon Glyph="{x:Bind PlayStopGlyph(ViewModel.IsPlaying), Mode=OneWay}"
+                              FontSize="24"/>
+                </Button>
+                <!-- Next Frame Button -->
+                <Button Grid.Column="3"
+                        Style="{StaticResource TransportButtonStyle}"
+                        Width="42"
+                        Height="42"
+                        Click="OnNextClick"
+                        IsEnabled="{x:Bind ViewModel.IsLoopReady, Mode=OneWay}"
+                        ToolTipService.ToolTip="Next frame">
+                    <FontIcon Glyph="&#xE893;"
+                              FontSize="16"/>
+                </Button>
+                <!-- The displayed frame's time, right of the buttons (slightly larger). -->
+                <TextBlock Grid.Column="4"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center"
+                           Text="{x:Bind ViewModel.CurrentFrameTimeText, Mode=OneWay}"
+                           FontSize="20"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+            </Grid>
+
+            <!-- Segmented scrubber: one cell per frame (ViewModel.Segments), each lighting up as its frame
+                 decodes (per-frame, so cells fill scattered then complete — the load indicator). The playhead
+                 is repositioned in code-behind over the current segment; pointer press/drag seeks. -->
+            <Grid x:Name="ScrubberHost"
+                  Grid.Row="1"
+                  Margin="0,10,0,0"
+                  Height="16"
+                  Background="Transparent"
+                  SizeChanged="OnScrubberSizeChanged"
+                  PointerPressed="OnScrubberPointerPressed"
+                  PointerMoved="OnScrubberPointerMoved"
+                  PointerReleased="OnScrubberPointerReleased"
+                  PointerCaptureLost="OnScrubberPointerReleased"
+                  PointerCanceled="OnScrubberPointerReleased">
+                <!-- Always-present track so the scrubber occupies the same footprint whether or not a loop
+                     is loaded (the cells render on top as frames decode). -->
+                <Border Height="6"
+                        VerticalAlignment="Center"
+                        CornerRadius="3"
+                        Background="{ThemeResource ControlFillColorSecondaryBrush}"/>
+                <ItemsControl ItemsSource="{x:Bind ViewModel.Segments, Mode=OneWay}"
+                              IsHitTestVisible="False"
+                              VerticalAlignment="Center"
+                              Height="8">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <controls:UniformHorizontalPanel/>
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:RadarFrameSegment">
+                            <Border Margin="1,0"
+                                    CornerRadius="2"
+                                    Background="{ThemeResource AccentFillColorDefaultBrush}"
+                                    Opacity="{x:Bind ReadyOpacity, Mode=OneWay}"/>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <Border x:Name="Playhead"
+                        Width="3"
+                        Height="16"
+                        CornerRadius="1.5"
+                        HorizontalAlignment="Left"
+                        VerticalAlignment="Center"
+                        Background="{ThemeResource TextFillColorPrimaryBrush}"
+                        IsHitTestVisible="False">
+                    <Border.RenderTransform>
+                        <TranslateTransform x:Name="PlayheadTransform"/>
+                    </Border.RenderTransform>
+                </Border>
+            </Grid>
+        </Grid>
+
+        <!-- ============================ SITE (right of transport) ============================
+             Labeled property list (site / time / scan / tilt / loading). Left-aligned at a fixed width so
+             it grows only rightward into the empty * space, never nudging the centered transport. -->
+        <Grid Grid.Column="2"
+              HorizontalAlignment="Left"
+              VerticalAlignment="Center"
+              Width="260"
+              ColumnSpacing="8"
+              RowSpacing="3">
             <!-- A reader shouldn't have to already know radar jargon to tell what's what — each label
                  carries a plain-language tooltip explaining the term (VCP, SAILS/MRLE, etc.). -->
-            <Grid ColumnSpacing="8"
-                  RowSpacing="3"
-                  MaxWidth="300"
-                  HorizontalAlignment="Left">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="*"/>
             </Grid.ColumnDefinitions>
             <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>
@@ -180,17 +319,23 @@
                        FontSize="{StaticResource RightClusterFontSize}"
                        Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                        ToolTipService.ToolTip="The selected radar site: its 4-letter station identifier and location name."/>
-            <StackPanel Grid.Row="0"
-                        Grid.Column="1"
-                        Orientation="Horizontal"
-                        Spacing="8">
-                <TextBlock Text="{x:Bind ViewModel.RadarSiteId, Mode=OneWay}"
+            <Grid Grid.Row="0"
+                  Grid.Column="1"
+                  ColumnSpacing="8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0"
+                           Text="{x:Bind ViewModel.RadarSiteId, Mode=OneWay}"
                            FontWeight="SemiBold"
                            FontSize="{StaticResource RightClusterFontSize}"/>
-                <TextBlock Text="{x:Bind ViewModel.RadarSiteName, Mode=OneWay}"
+                <TextBlock Grid.Column="1"
+                           Text="{x:Bind ViewModel.RadarSiteName, Mode=OneWay}"
                            FontSize="{StaticResource RightClusterFontSize}"
+                           TextTrimming="CharacterEllipsis"
                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-            </StackPanel>
+            </Grid>
             <!-- Time -->
             <TextBlock Grid.Row="1"
                        Grid.Column="0"
@@ -200,18 +345,23 @@
                        ToolTipService.ToolTip="When this radar frame was scanned."/>
             <!-- Time value + staleness of the freshest frame, side by side. The age font is color-ramped
                  fresh(green)→stale(red) by its age in minutes (AgeBrush), so freshness reads at a glance. -->
-            <StackPanel Grid.Row="1"
-                        Grid.Column="1"
-                        Orientation="Horizontal"
-                        Spacing="8">
-                <TextBlock Text="{x:Bind ViewModel.RadarCardTime, Mode=OneWay}"
+            <Grid Grid.Row="1"
+                  Grid.Column="1"
+                  ColumnSpacing="8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0"
+                           Text="{x:Bind ViewModel.RadarCardTime, Mode=OneWay}"
                            FontSize="{StaticResource RightClusterFontSize}"/>
-                <TextBlock Text="{x:Bind ViewModel.RadarAgeText, Mode=OneWay}"
+                <TextBlock Grid.Column="1"
+                           Text="{x:Bind ViewModel.RadarAgeText, Mode=OneWay}"
                            FontSize="{StaticResource RightClusterFontSize}"
                            Foreground="{x:Bind AgeBrush(ViewModel.RadarAgeMinutes), Mode=OneWay}"
                            VerticalAlignment="Center"
                            ToolTipService.ToolTip="How long ago the newest available frame was scanned. Green = fresh, red = stale."/>
-            </StackPanel>
+            </Grid>
             <!-- Scan -->
             <TextBlock Grid.Row="2"
                        Grid.Column="0"
@@ -236,24 +386,6 @@
                        Text="{x:Bind RadarSweepText(ViewModel.RadarModeText), Mode=OneWay}"
                        FontSize="{StaticResource RightClusterFontSize}"
                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-
-            <!-- 5th row: backfill progress ("Loading 4/10 frames…"), only while older frames are
-                 still decoding — collapses once the whole loop is ready, so it never sits there
-                 reading "Loading" forever. -->
-            <TextBlock Grid.Row="4"
-                       Grid.Column="0"
-                       Text="Loading"
-                       FontSize="20"
-                       Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                       Visibility="{x:Bind LoadingVisibility(ViewModel.RadarLoadingText), Mode=OneWay}"
-                       ToolTipService.ToolTip="The newest frame shows right away, but older frames in the loop are decoded in the background — this shows how many are done."/>
-            <TextBlock Grid.Row="4"
-                       Grid.Column="1"
-                       Text="{x:Bind ViewModel.RadarLoadingText, Mode=OneWay}"
-                       FontSize="20"
-                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                       Visibility="{x:Bind LoadingVisibility(ViewModel.RadarLoadingText), Mode=OneWay}"/>
-            </Grid>
-        </StackPanel>
+        </Grid>
     </Grid>
 </UserControl>

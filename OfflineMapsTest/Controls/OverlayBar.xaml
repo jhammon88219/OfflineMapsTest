@@ -5,7 +5,7 @@
      content slot: the host fills BarContent with the actual controls (loop transport,
      product selectors, …), so section content is composed in MainWindow, not here.
      (Named for what it IS — a bottom overlay shell — not for what it happens to host;
-     the round play/scrub control it hosts is the actual "transport control", RadialTransport.)
+     the actual radar transport lives in the RadarControls section it hosts.)
 
      It renders as a bottom OVERLAY: the host places it VerticalAlignment=Bottom over the
      full-height map, so showing/hiding the bar never resizes the map. The control's own
@@ -25,23 +25,9 @@
 
     <UserControl.Resources>
         <ResourceDictionary>
-            <!-- Opaque surface + hover brushes, defined per theme so the bar/tab follow the Windows 11
-                 light/dark setting at runtime (ThemeResource re-evaluates on theme change) while we keep
-                 exact control of the look and full opacity. Border/text reuse the system theme brushes. -->
-            <ResourceDictionary.ThemeDictionaries>
-                <ResourceDictionary x:Key="Default">
-                    <SolidColorBrush x:Key="OverlayBarSurfaceBrush" Color="#FF1C1C1C"/>
-                    <SolidColorBrush x:Key="OverlayBarSurfaceHoverBrush" Color="#FF2A2A2A"/>
-                </ResourceDictionary>
-                <ResourceDictionary x:Key="Light">
-                    <SolidColorBrush x:Key="OverlayBarSurfaceBrush" Color="#FFF3F3F3"/>
-                    <SolidColorBrush x:Key="OverlayBarSurfaceHoverBrush" Color="#FFE4E4E4"/>
-                </ResourceDictionary>
-                <ResourceDictionary x:Key="HighContrast">
-                    <SolidColorBrush x:Key="OverlayBarSurfaceBrush" Color="{ThemeResource SystemColorButtonFaceColor}"/>
-                    <SolidColorBrush x:Key="OverlayBarSurfaceHoverBrush" Color="{ThemeResource SystemColorHighlightColor}"/>
-                </ResourceDictionary>
-            </ResourceDictionary.ThemeDictionaries>
+            <!-- The opaque surface + hover brushes (OverlayBarSurfaceBrush / …HoverBrush) are defined
+                 app-wide in Controls/Styles.xaml so the floating settings cards can share them; they
+                 resolve here via ThemeResource and follow the Win11 light/dark setting at runtime. -->
 
             <!-- The centered pull-tab: a flat-bottomed tab that reads as attached to the bar's top edge
                  (bottom border omitted; -1 bottom margin laps over the bar's top border so the two merge).
@@ -95,17 +81,24 @@
     <!-- Transparent root: only the tab + bar draw, so the map shows through beside the tab. -->
     <Grid>
         <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/> <!-- floating settings card (above the bar; collapses when none) -->
             <RowDefinition Height="Auto"/> <!-- pull-tab -->
             <RowDefinition Height="Auto"/> <!-- overlay bar (collapses when hidden) -->
         </Grid.RowDefinitions>
 
-        <!-- Shadow host: spans both rows, BEHIND everything (declared first). Code-behind draws the
+        <!-- Card slot: a temporal feature's settings card floats here, just above the bar. Filled by the
+             host (see CardContent — MainWindow drops the TemporalCards section in). Left-aligned so it
+             rises near the toggles' cogs and clears the centered pull-tab; nothing draws when no card. -->
+        <ContentPresenter x:Name="CardHost" Grid.Row="0" HorizontalAlignment="Left"
+                          Margin="0,0,0,6" Content="{x:Bind CardContent, Mode=OneWay}"/>
+
+        <!-- Shadow host: spans the tab + bar rows, BEHIND them (declared first). Code-behind draws the
              accent glows for both the bar and the tab into one container visual here. Because it's
              below the tab in z-order, no glow can cross in front of the tab. -->
-        <Border x:Name="ShadowHost" Grid.Row="0" Grid.RowSpan="2" IsHitTestVisible="False"/>
+        <Border x:Name="ShadowHost" Grid.Row="1" Grid.RowSpan="2" IsHitTestVisible="False"/>
 
         <!-- The bar itself: a content slot the host fills (see BarContent). Collapses when hidden. -->
-        <Border x:Name="BarBorder" Grid.Row="1" Background="{ThemeResource OverlayBarSurfaceBrush}"
+        <Border x:Name="BarBorder" Grid.Row="2" Background="{ThemeResource OverlayBarSurfaceBrush}"
                 BorderThickness="0,1,0,0" SizeChanged="OnLayoutChanged"
                 Visibility="{x:Bind VisibleWhen(IsOverlayBarVisible), Mode=OneWay}"
                 BorderBrush="{ThemeResource CardStrokeColorDefaultSolidBrush}" Padding="16,10">
@@ -115,7 +108,7 @@
         <!-- Centered pull-tab: reads Hide (bar showing) / Show (bar hidden). Declared LAST so it's
              top-most — its own glow (and the bar's) is drawn in the ShadowHost below it, so nothing
              renders in front of the tab. -->
-        <Button x:Name="TabButton" Grid.Row="0" Style="{StaticResource OverlayBarTabStyle}"
+        <Button x:Name="TabButton" Grid.Row="1" Style="{StaticResource OverlayBarTabStyle}"
                 Click="OnToggleOverlayBarClick" SizeChanged="OnLayoutChanged"
                 ToolTipService.ToolTip="Show / hide the loop controls">
             <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">

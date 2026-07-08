@@ -1,6 +1,8 @@
 using System;
+using System.ComponentModel;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using OfflineMapsTest.Models;
 using OfflineMapsTest.ViewModels;
@@ -8,9 +10,10 @@ using OfflineMapsTest.ViewModels;
 namespace OfflineMapsTest.Controls.Sections
 {
 	/// <summary>
-	/// The merged center transport-bar section: the RadialTransport dial (play/stop + ring scrubber),
-	/// the selected-radar info line, and the radar display controls (show/hide sites, product, tilt).
-	/// Loop + product controls were recombined here onto one <see cref="RadarViewModel"/>.
+	/// The whole radar console in one control: the center transport cluster (prev · play/stop · next +
+	/// a linear scrubber + frame N/M and time), the left display controls (color scale, product, tilt,
+	/// show/hide sites, inspect), and the right selected-site readout. All bound to one
+	/// <see cref="RadarViewModel"/>.
 	/// </summary>
 	public sealed partial class RadarControls : UserControl
 	{
@@ -27,10 +30,132 @@ namespace OfflineMapsTest.Controls.Sections
 		}
 
 		public static readonly DependencyProperty ViewModelProperty =
-			DependencyProperty.Register(nameof(ViewModel), typeof(RadarViewModel), typeof(RadarControls), new PropertyMetadata(null));
+			DependencyProperty.Register(nameof(ViewModel), typeof(RadarViewModel), typeof(RadarControls),
+				new PropertyMetadata(null, OnViewModelChanged));
+
+		// Track the VM's frame index / count so the scrubber playhead can follow (there's no thumb control
+		// to two-way-bind now — the segmented scrubber is drawn, and the playhead is positioned by code).
+		private static void OnViewModelChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+		{
+			var self = (RadarControls)d;
+			if (e.OldValue is RadarViewModel oldVm)
+			{
+				oldVm.PropertyChanged -= self.OnViewModelPropertyChanged;
+				oldVm.Segments.CollectionChanged -= self.OnSegmentsChanged;
+			}
+			if (e.NewValue is RadarViewModel newVm)
+			{
+				newVm.PropertyChanged += self.OnViewModelPropertyChanged;
+				newVm.Segments.CollectionChanged += self.OnSegmentsChanged; // count changes -> reposition playhead
+			}
+			self.UpdatePlayhead();
+		}
+
+		private void OnSegmentsChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e) =>
+			UpdatePlayhead();
+
+		private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
+		{
+			if (e.PropertyName is nameof(RadarViewModel.CurrentFrameIndex) or nameof(RadarViewModel.MaxFrameIndex))
+			{
+				UpdatePlayhead();
+			}
+		}
 
 		private void OnToggleSitesClick(object sender, RoutedEventArgs e) =>
 			ViewModel?.ToggleRadarSitesVisible();
+
+		// Play/stop button: while playing, Stop (halt + return to newest); otherwise Play/resume. Mirrors
+		// the old dial's center button so the single-button "play + stop in one" behavior is unchanged.
+		private void OnPlayStopClick(object sender, RoutedEventArgs e)
+		{
+			if (ViewModel is null)
+			{
+				return;
+			}
+			if (ViewModel.IsPlaying)
+			{
+				ViewModel.StopRadarLoop();
+			}
+			else
+			{
+				ViewModel.ToggleRadarPlay();
+			}
+		}
+
+		private void OnPrevClick(object sender, RoutedEventArgs e) => ViewModel?.StepFrame(-1);
+
+		private void OnNextClick(object sender, RoutedEventArgs e) => ViewModel?.StepFrame(+1);
+
+		// ---- Segmented scrubber interaction ----
+		// The scrubber is drawn (cells + playhead), not a Slider, so seeking is handled here: press/drag on
+		// the strip maps the pointer x to a frame index. Playback pauses on grab so the drag isn't fought by
+		// the advancing loop, and the playhead follows via UpdatePlayhead (VM PropertyChanged / SizeChanged).
+		private bool _scrubbing;
+
+		private void OnScrubberPointerPressed(object sender, PointerRoutedEventArgs e)
+		{
+			if (ViewModel is null || ViewModel.Segments.Count == 0) return;
+			_scrubbing = true;
+			ScrubberHost.CapturePointer(e.Pointer);
+			if (ViewModel.IsPlaying) ViewModel.ToggleRadarPlay(); // pause in place; stays engaged so Stop remains available
+			SeekToPointer(e);
+		}
+
+		private void OnScrubberPointerMoved(object sender, PointerRoutedEventArgs e)
+		{
+			if (_scrubbing) SeekToPointer(e);
+		}
+
+		private void OnScrubberPointerReleased(object sender, PointerRoutedEventArgs e)
+		{
+			if (!_scrubbing) return;
+			_scrubbing = false;
+			ScrubberHost.ReleasePointerCapture(e.Pointer);
+		}
+
+		private void OnScrubberSizeChanged(object sender, SizeChangedEventArgs e) => UpdatePlayhead();
+
+		private void SeekToPointer(PointerRoutedEventArgs e)
+		{
+			if (ViewModel is null) return;
+			// Count from the RENDERED cells (Segments), so seek + playhead + cells always agree.
+			var count = ViewModel.Segments.Count;
+			var width = ScrubberHost.ActualWidth;
+			if (count <= 0 || width <= 0) return;
+			var x = e.GetCurrentPoint(ScrubberHost).Position.X;
+			var idx = Math.Clamp((int)Math.Floor(x / (width / count)), 0, count - 1);
+			if (idx != ViewModel.CurrentFrameIndex) ViewModel.CurrentFrameIndex = idx;
+		}
+
+		// Positions the playhead over the current segment's centre. Uses Segments.Count and the SAME
+		// per-cell rounding as UniformHorizontalPanel, so the playhead lands exactly on each cell's midpoint
+		// (no cumulative drift). Called when the frame index / count changes (VM) or the strip resizes.
+		private void UpdatePlayhead()
+		{
+			if (ViewModel is null || ScrubberHost is null || Playhead is null || PlayheadTransform is null) return;
+			var count = ViewModel.Segments.Count;
+			var width = ScrubberHost.ActualWidth;
+			if (count <= 0 || width <= 0)
+			{
+				Playhead.Visibility = Visibility.Collapsed;
+				return;
+			}
+			Playhead.Visibility = Visibility.Visible;
+			var idx = Math.Clamp(ViewModel.CurrentFrameIndex, 0, count - 1);
+			var cell = width / count;
+			// Cell idx spans [round(idx*cell), round((idx+1)*cell)] in the panel — centre on that span.
+			var centre = (Math.Round(idx * cell) + Math.Round((idx + 1) * cell)) / 2;
+			PlayheadTransform.X = Math.Clamp(centre - Playhead.Width / 2, 0, width - Playhead.Width);
+		}
+
+		// Segoe Fluent glyph for the center button: Stop while playing, Play otherwise.
+		public string PlayStopGlyph(bool isPlaying) => isPlaying ? "" : "";
+
+		// "N / M" frame counter (1-based) shown under the scrubber. Empty until there's a real multi-frame
+		// loop (max 0 = 0 or 1 frames, where the scrubber is disabled anyway) so it isn't a misleading "1 / 1".
+		public string FrameCountText(double current, int max) =>
+			max <= 0 ? string.Empty : $"{(int)Math.Round(current) + 1} / {max + 1}";
 
 		// RadarViewModel.RadarModeText is one formatted string, e.g. "VCP 215 · precip · 0.5°×3 ·
 		// SAILS/MRLE ×2" (or "VCP ? · 0.5°×3" when the VCP couldn't be read). These x:Bind functions
@@ -65,11 +190,6 @@ namespace OfflineMapsTest.Controls.Sections
 			var idx = mode.IndexOf("0.5°", StringComparison.Ordinal);
 			return idx > 0 ? idx : mode.Length; // no sweep segment (e.g. "—" / "loading…") — keep it all on the top line
 		}
-
-		// Collapses the "Loading N/M frames…" row once it's empty (the whole loop has decoded),
-		// rather than leaving a blank line in its place.
-		public Visibility LoadingVisibility(string loadingText) =>
-			string.IsNullOrEmpty(loadingText) ? Visibility.Collapsed : Visibility.Visible;
 
 		// Generic bool → Visibility for x:Bind (color-scale bar, inspect tick, numerical scale row).
 		public Visibility VisibleWhen(bool value) =>

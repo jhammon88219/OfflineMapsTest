@@ -56,6 +56,11 @@ namespace OfflineMapsTest.Services
 		/// <summary>Sets the rendered radar moment: "reflectivity" or "velocity".</summary>
 		Task SetRadarProductAsync(string product);
 
+		/// <summary>Speculatively builds velocity geometry for the loaded loop in the background (before
+		/// the user selects the Velocity product), so a later switch to Velocity is instant. Host calls
+		/// this once the reflectivity loop has finished rendering.</summary>
+		Task PrefetchRadarVelocityAsync();
+
 		/// <summary>
 		/// Enables or disables inspect mode (read the value under the cursor). While on, the WebView
 		/// shows a value tooltip at the pointer and posts the value for the color-scale marker.

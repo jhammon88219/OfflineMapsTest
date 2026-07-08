@@ -63,6 +63,9 @@ namespace OfflineMapsTest.Services
 		public Task SetRadarProductAsync(string product) =>
 			_mapView.RunScriptAsync(Call("setRadarProduct", product));
 
+		public Task PrefetchRadarVelocityAsync() =>
+			_mapView.RunScriptAsync(Call("prefetchRadarVelocity"));
+
 		public Task SetRadarInspectAsync(bool enabled) =>
 			_mapView.RunScriptAsync(Call("setRadarInspect", enabled));
 
