@@ -622,13 +622,27 @@ namespace OfflineMapsTest.ViewModels
 		/// Adding a product = one entry here + the JS side (a build fn + ramp + registry entry).</summary>
 		public IReadOnlyList<RadarProductOption> RadarProductOptions { get; } = new[]
 		{
-			new RadarProductOption("reflectivity", "Reflectivity", false),
-			new RadarProductOption("velocity", "Velocity", true),
-			new RadarProductOption("cc", "Correlation Coefficient", false),
-			new RadarProductOption("kdp", "Specific Differential Phase", false),
-			new RadarProductOption("zdr", "Differential Reflectivity", false),
-			new RadarProductOption("sw", "Spectrum Width", false),
+			new RadarProductOption("reflectivity", "Reflectivity", "Ref", false),
+			new RadarProductOption("velocity", "Velocity", "Vel", true),
+			new RadarProductOption("cc", "Correlation Coefficient", "CC", false),
+			new RadarProductOption("kdp", "Specific Differential Phase", "KDP", false),
+			new RadarProductOption("zdr", "Differential Reflectivity", "ZDR", false),
+			new RadarProductOption("sw", "Spectrum Width", "SW", false),
 		};
+
+		/// <summary>
+		/// Fans the WebView's full ramp table (radar-ramps.js, keyed by product id) onto the product
+		/// options, so the Product combo can draw EVERY product's scale — not just the active one. Pushed
+		/// once when the page loads; unknown ids are ignored and a product with no ramp simply draws none.
+		/// </summary>
+		public void SetAllRamps(IReadOnlyDictionary<string, RadarRampInfo>? ramps)
+		{
+			if (ramps is null) return;
+			foreach (var option in RadarProductOptions)
+			{
+				option.Ramp = ramps.TryGetValue(option.Id, out var ramp) ? ramp : null;
+			}
+		}
 
 		// Index into RadarProductOptions. Bound to the Radar console's Product combo (SelectedIndex).
 		private int _radarProductIndex;

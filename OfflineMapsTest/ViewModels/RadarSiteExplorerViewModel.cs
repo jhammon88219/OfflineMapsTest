@@ -24,7 +24,7 @@ namespace OfflineMapsTest.ViewModels
 	/// </list>
 	/// The detail pane shows instant static facts + live status + distance, and fetches the selected
 	/// site's latest-scan time and VCP/scan mode on demand via
-	/// <see cref="ILevel2RadarService.GetLatestVolumeAsync"/>.
+	/// <see cref="ILevel2RadarService.GetLatestScanAsync"/>.
 	/// </summary>
 	public sealed class RadarSiteExplorerViewModel : INotifyPropertyChanged
 	{
@@ -43,6 +43,20 @@ namespace OfflineMapsTest.ViewModels
 
 			FilteredSites = new ObservableCollection<RadarSiteRow>();
 			RebuildFiltered();
+
+			// For the site the loop is showing, our scan read-out IS the loop's — so re-raise it whenever the
+			// loop's frame time / mode / selection changes, and the two stay in lock-step (a new live frame
+			// updates both at once) instead of the explorer freezing at whatever it fetched on selection.
+			_radar.PropertyChanged += (_, e) =>
+			{
+				if (e.PropertyName is nameof(RadarViewModel.NewestLoadedFrameTime)
+					or nameof(RadarViewModel.RadarModeText)
+					or nameof(RadarViewModel.SelectedRadarOption)
+					or nameof(RadarViewModel.HasRadarLoop))
+				{
+					RaiseScan();
+				}
+			};
 		}
 
 		// ── Search + filters ─────────────────────────────────────────────────────────────────────
@@ -169,66 +183,105 @@ namespace OfflineMapsTest.ViewModels
 			}
 		}
 
-		// On-demand scan info (latest volume time + VCP/scan mode), fetched per selection.
+		// Scan info (latest scan time + VCP/scan mode). TWO sources, deliberately:
+		//   • The site the LOOP is showing — read straight off the radar VM. It already holds the exact
+		//     sweep time + mode, so the explorer and the Selected Site readout agree to the second and
+		//     advance together. (Re-fetching it would mean rebuilding the live frame — a ~8-12 s,
+		//     tens-of-MB chunks download per click, which would also clobber the shared live-frame cache.)
+		//   • Any OTHER site — fetched on demand (GetLatestScanAsync). Nothing is displaying a time for it,
+		//     so there's nothing to be out of sync with; the chunks/archive estimate is enough.
 		private bool _isLoadingScanInfo;
-		private string _latestScanText = string.Empty;
-		private string _vcpModeText = string.Empty;
+		private RadarScanInfo? _fetchedScan;   // the on-demand result (non-loaded sites)
+		private string _scanStatus = string.Empty; // "No recent data" / "Unavailable" when there's no time
 
-		/// <summary>True while the latest-scan/VCP fetch is in flight (drives the detail spinner).</summary>
+		/// <summary>True while the latest-scan/VCP fetch is in flight (drives the detail spinner). Never
+		/// set for the loaded site — its numbers come from the loop for free.</summary>
 		public bool IsLoadingScanInfo
 		{
 			get => _isLoadingScanInfo;
 			private set { if (_isLoadingScanInfo != value) { _isLoadingScanInfo = value; OnPropertyChanged(); } }
 		}
 
-		/// <summary>Latest scan time + age for the selected site (empty until fetched).</summary>
+		/// <summary>Whether the selected site is the one the loop is currently showing.</summary>
+		private bool IsLoadedSite(RadarSiteRow? row) =>
+			row?.Site is { } s && _radar.HasRadarLoop && _radar.SelectedRadarOption?.Site == s;
+
+		/// <summary>Latest scan time + age for the selected site. For the loaded site this IS the loop's
+		/// own frame time, so the two readouts can't drift apart.</summary>
 		public string LatestScanText
 		{
-			get => _latestScanText;
-			private set { if (_latestScanText != value) { _latestScanText = value; OnPropertyChanged(); } }
+			get
+			{
+				var t = IsLoadedSite(_selectedSite) ? _radar.NewestLoadedFrameTime : _fetchedScan?.ScanTime;
+				if (t is not { } scan) return _scanStatus;
+				var local = scan.ToLocalTime();
+				return $"{local:g} ({FormatAge(DateTimeOffset.Now - local)})";
+			}
 		}
 
-		/// <summary>VCP / scan-mode line for the selected site (empty until fetched).</summary>
+		/// <summary>VCP / scan-mode line for the selected site (from the loop when it's the loaded site).</summary>
 		public string VcpModeText
 		{
-			get => _vcpModeText;
-			private set { if (_vcpModeText != value) { _vcpModeText = value; OnPropertyChanged(); } }
+			get
+			{
+				if (IsLoadedSite(_selectedSite))
+				{
+					var mode = _radar.RadarModeText;
+					return string.IsNullOrEmpty(mode) ? "—" : mode;
+				}
+				return string.IsNullOrEmpty(_fetchedScan?.ModeText) ? string.Empty : _fetchedScan!.ModeText!;
+			}
+		}
+
+		// Re-raise the scan read-out (both derived properties).
+		private void RaiseScan()
+		{
+			OnPropertyChanged(nameof(LatestScanText));
+			OnPropertyChanged(nameof(VcpModeText));
 		}
 
 		private async Task LoadDetailAsync(RadarSiteRow? row, int token)
 		{
-			LatestScanText = string.Empty;
-			VcpModeText = string.Empty;
+			_fetchedScan = null;
+			_scanStatus = string.Empty;
+			RaiseScan();
 			if (row is null)
 			{
 				IsLoadingScanInfo = false;
 				return;
 			}
 
+			// The loop already knows this site's exact scan time + mode — read them off the VM (see the
+			// scan-info fields) rather than paying for a second, staler lookup. No fetch, no spinner.
+			if (IsLoadedSite(row))
+			{
+				IsLoadingScanInfo = false;
+				RaiseScan();
+				return;
+			}
+
 			IsLoadingScanInfo = true;
 			try
 			{
-				var volume = await _radarService.GetLatestVolumeAsync(row.Site);
+				var scan = await _radarService.GetLatestScanAsync(row.Site);
 				if (token != _detailToken) return; // selection changed while we were fetching
 
-				if (volume is null)
+				if (scan is null)
 				{
-					LatestScanText = "No recent data";
-					VcpModeText = string.Empty;
+					_scanStatus = "No recent data";
 				}
 				else
 				{
-					var age = DateTimeOffset.Now - volume.VolumeTime.ToLocalTime();
-					LatestScanText = $"{volume.VolumeTime.ToLocalTime():g} ({FormatAge(age)})";
-					VcpModeText = string.IsNullOrEmpty(volume.ModeText) ? "—" : volume.ModeText!;
+					_fetchedScan = scan;
 				}
+				RaiseScan();
 			}
 			catch
 			{
 				if (token == _detailToken)
 				{
-					LatestScanText = "Unavailable";
-					VcpModeText = string.Empty;
+					_scanStatus = "Unavailable";
+					RaiseScan();
 				}
 			}
 			finally

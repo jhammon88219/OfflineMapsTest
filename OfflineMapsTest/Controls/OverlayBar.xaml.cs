@@ -29,29 +29,6 @@ namespace OfflineMapsTest.Controls
 		public static readonly DependencyProperty BarContentProperty =
 			DependencyProperty.Register(nameof(BarContent), typeof(object), typeof(OverlayBar), new PropertyMetadata(null));
 
-		/// <summary>The content floating just ABOVE the bar (filled by the host — the temporal settings
-		/// cards). Nothing draws when it's null/collapsed, so the tab sits flush above the bar as before.</summary>
-		public object? CardContent
-		{
-			get => GetValue(CardContentProperty);
-			set => SetValue(CardContentProperty, value);
-		}
-
-		public static readonly DependencyProperty CardContentProperty =
-			DependencyProperty.Register(nameof(CardContent), typeof(object), typeof(OverlayBar), new PropertyMetadata(null));
-
-		/// <summary>The app-wide settings card floating just ABOVE the bar on the RIGHT (mirror of
-		/// <see cref="CardContent"/>). Filled by the host (the AppSettingsCard section); nothing draws when
-		/// null/collapsed.</summary>
-		public object? SettingsCardContent
-		{
-			get => GetValue(SettingsCardContentProperty);
-			set => SetValue(SettingsCardContentProperty, value);
-		}
-
-		public static readonly DependencyProperty SettingsCardContentProperty =
-			DependencyProperty.Register(nameof(SettingsCardContent), typeof(object), typeof(OverlayBar), new PropertyMetadata(null));
-
 		/// <summary>Whether the bar is shown (the pull-tab toggles it). Pure view state.</summary>
 		public bool IsOverlayBarVisible
 		{

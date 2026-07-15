@@ -122,6 +122,11 @@ try {
             var r = m[k];
             if (r && r.id && Array.isArray(r.stops)) radarRamps[r.id] = r;
         });
+        // Push the WHOLE table once: the Product combo draws EVERY product's ramp next to its name, so the
+        // host needs them all — not just the active one (which postRampFor sends for the inspect marker).
+        if (window.chrome && window.chrome.webview) {
+            window.chrome.webview.postMessage(JSON.stringify({ type: 'radarRamps', ramps: radarRamps }));
+        }
         postRampFor(radarProduct); // whatever product is active once the ramps are loaded
     }).catch(function (e) { /* legend stays empty if ramps can't load */ });
 

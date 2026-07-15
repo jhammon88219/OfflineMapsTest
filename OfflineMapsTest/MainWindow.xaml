@@ -14,24 +14,49 @@
     mc:Ignorable="d"
     Title="OfflineMapsTest">
 
-    <!-- The map fills the whole window; UI (the transport bar) floats on top as an overlay, so
-         showing/hiding the bar never changes the map's size. -->
-    <Grid Background="#FF0A0A0A">
-        <!-- Full-window map (bottom layer; all UI overlays float on top of it). -->
-        <controls:WebView2 x:Name="MainMapWebView"/>
+    <!-- The map fills the whole window; UI (the transport bar + the floating windows) sits on top as an
+         overlay, so showing/hiding the bar never changes the map's size.
 
-        <!-- Overlay bar: a chrome-only shell (Controls/OverlayBar) that floats as a bottom
-             overlay. CardContent floats a feature's settings card ABOVE the bar; BarContent holds the
-             bar itself — left: temporal split-toggles; center: loop controls + product. -->
-        <ctl:OverlayBar VerticalAlignment="Bottom">
-            <!-- Floating settings cards (Past / Now / Fore), shown above the bar when a cog is clicked. -->
-            <ctl:OverlayBar.CardContent>
-                <sections:TemporalCards ViewModel="{x:Bind ViewModel}"/>
-            </ctl:OverlayBar.CardContent>
-            <!-- App-wide settings card (right side), the mirror of the temporal cards; opened by the cog. -->
-            <ctl:OverlayBar.SettingsCardContent>
-                <sections:AppSettingsCard ViewModel="{x:Bind ViewModel}"/>
-            </ctl:OverlayBar.SettingsCardContent>
+         Two overlay rows, and the split is what keeps every floating window aligned:
+           Row 0 — the FLOATING LAYER. Every window that pops over the map lives here, bottom-aligned with
+                   the shared FloatingWindowMargin. Because the row ends where the bar's chrome begins, one
+                   margin buys each window the same inset from the window edges AND the same gap above the
+                   bar — no window hardcodes a guess at the bar's height (which is what let the site
+                   explorer overlap it).
+           Row 1 — the OverlayBar chrome (pull-tab + bar), auto-sized, pinned to the bottom.
+         The map spans both rows, so the layer boundary is invisible and costs the map nothing. -->
+    <Grid Background="#FF0A0A0A">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*"/>    <!-- floating layer: the windows that pop over the map -->
+            <RowDefinition Height="Auto"/> <!-- the OverlayBar chrome (tab + bar) -->
+        </Grid.RowDefinitions>
+
+        <!-- Full-window map (bottom layer; all UI overlays float on top of it). -->
+        <controls:WebView2 x:Name="MainMapWebView" Grid.Row="0" Grid.RowSpan="2"/>
+
+        <!-- ===== Row 0: the floating windows. All bottom-aligned, all on FloatingWindowMargin. ===== -->
+
+        <!-- Temporal settings cards (Past / Now / Fore), shown when a toggle's cog is clicked. Left,
+             so each card rises near the cog that opened it. -->
+        <sections:TemporalCards Grid.Row="0" VerticalAlignment="Bottom" HorizontalAlignment="Left"
+                                Margin="{StaticResource FloatingWindowMargin}"
+                                ViewModel="{x:Bind ViewModel}"/>
+
+        <!-- App-wide settings card, the mirror of the temporal cards; opened by the bar's right-edge cog. -->
+        <sections:AppSettingsCard Grid.Row="0" VerticalAlignment="Bottom" HorizontalAlignment="Right"
+                                  Margin="{StaticResource FloatingWindowMargin}"
+                                  ViewModel="{x:Bind ViewModel}"/>
+
+        <!-- Radar Site Explorer: a non-modal panel over the map (the map stays live). A larger free panel
+             rather than a small cog-anchored card, but it floats on the same layer + margin as the cards.
+             Its own visibility follows ViewModel.IsSiteExplorerOpen. -->
+        <sections:RadarSiteExplorer Grid.Row="0" VerticalAlignment="Bottom" HorizontalAlignment="Right"
+                                    Margin="{StaticResource FloatingWindowMargin}"
+                                    ViewModel="{x:Bind ViewModel}"/>
+
+        <!-- ===== Row 1: the bar chrome. BarContent holds the bar's own controls — left: temporal
+             split-toggles; center: loop controls + product; right: Sites + Settings. ===== -->
+        <ctl:OverlayBar Grid.Row="1">
             <ctl:OverlayBar.BarContent>
                 <!-- Single overlay cell: RadarControls STRETCHES to full bar width and centers its own
                      transport at window-center (its internal * | Auto | * grid does the centering); the
@@ -81,13 +106,5 @@
                 </Grid>
             </ctl:OverlayBar.BarContent>
         </ctl:OverlayBar>
-
-        <!-- Radar Site Explorer: a non-modal floating panel over the map (a sibling of the bar, NOT hosted
-             in the bar's small cog-anchored card slots — it's a larger free panel). Floats bottom-right,
-             clearing the bar's height. Its own visibility follows ViewModel.IsSiteExplorerOpen. -->
-        <sections:RadarSiteExplorer VerticalAlignment="Bottom" HorizontalAlignment="Right"
-                                    Margin="0,0,16,96"
-                                    ViewModel="{x:Bind ViewModel}"/>
-
     </Grid>
 </Window>

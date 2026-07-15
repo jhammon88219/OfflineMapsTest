@@ -66,10 +66,10 @@ namespace OfflineMapsTest.Services
 			return recent;
 		}
 
-		public async Task<RadarVolume?> GetLatestVolumeAsync(RadarSite site, CancellationToken cancellationToken = default)
+		public async Task<RadarScanInfo?> GetLatestScanAsync(RadarSite site, CancellationToken cancellationToken = default)
 		{
-			// Newest archive volume for the site (listing only), then ensure its lowest tilt is cached —
-			// EnsureCachedAsync already fills VolumeTime (latest scan) + ModeText (VCP/scan mode).
+			// Newest ARCHIVE volume for the site (listing only), then ensure its lowest tilt is cached —
+			// EnsureCachedAsync fills VolumeTime + ModeText (the VCP, parsed from the tilt's metadata).
 			// Use the window listing (last few hours) rather than GetRecentKeysAsync so we DON'T prune the
 			// site's cache: browsing a detail must never disturb a loop running on the same site.
 			var now = DateTimeOffset.UtcNow;
@@ -79,7 +79,30 @@ namespace OfflineMapsTest.Services
 				return null; // no recent data in the feed for this site
 			}
 
-			return await EnsureCachedAsync(site, keys[^1], cancellationToken);
+			var archive = await EnsureCachedAsync(site, keys[^1], cancellationToken);
+			if (archive is null)
+			{
+				return null;
+			}
+
+			// The archive runs ~5-10 min behind, but the loop's LIVE frame comes from the near-real-time
+			// chunks bucket (~1-2 min) — so reporting the archive alone made this read minutes staler than
+			// the loop showing the same site. Take the newest chunks volume's start when it's fresher. This
+			// is a LISTING only (no chunk downloads, no _liveVolKey/_liveBlocks mutation), so it can't
+			// disturb the live-frame cache of a loop polling a different site.
+			var scanTime = archive.VolumeTime;
+			try
+			{
+				if (await FindNewestChunkVolumeAsync(site.Id, cancellationToken) is { } newest
+					&& newest.start > scanTime && newest.start <= now)
+				{
+					scanTime = newest.start;
+				}
+			}
+			catch (OperationCanceledException) { throw; }
+			catch { /* chunks are best-effort: fall back to the archive time */ }
+
+			return new RadarScanInfo(scanTime, archive.ModeText);
 		}
 
 		public async Task<IReadOnlyList<string>> GetKeysForWindowAsync(RadarSite site, DateTimeOffset startUtc, DateTimeOffset endUtc, CancellationToken cancellationToken = default)

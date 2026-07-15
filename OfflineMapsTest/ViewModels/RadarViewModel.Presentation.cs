@@ -171,6 +171,15 @@ namespace OfflineMapsTest.ViewModels
 			return text.Length == 0 ? "just now" : text;
 		}
 
+		/// <summary>
+		/// Collection time of the freshest LOADED frame — the exact instant the Selected Site readout
+		/// shows (null when no loop). Exposed so the Radar Site Explorer can report the SAME number for the
+		/// site the loop is showing, instead of a second (staler) estimate fetched from the buckets: the
+		/// live frame's real sweep time is only knowable by building the frame, which is far too expensive
+		/// to redo per site click. Re-raised by RaiseRadarReadout, so readers track the loop live.
+		/// </summary>
+		public DateTimeOffset? NewestLoadedFrameTime => NewestFrameTime();
+
 		/// <summary>Raw age of the freshest frame in minutes (null when no frame yet). Drives the
 		/// smooth fresh→stale color ramp applied to the age readout — see RadarControls.AgeBrush.</summary>
 		public double? RadarAgeMinutes =>
@@ -237,6 +246,7 @@ namespace OfflineMapsTest.ViewModels
 			OnPropertyChanged(nameof(RadarModeText));
 			OnPropertyChanged(nameof(RadarAgeText));
 			OnPropertyChanged(nameof(RadarAgeMinutes));
+			OnPropertyChanged(nameof(NewestLoadedFrameTime));
 			OnPropertyChanged(nameof(RadarLoopSpanText));
 			OnPropertyChanged(nameof(RadarStatus));
 			OnPropertyChanged(nameof(RadarLoadingText));

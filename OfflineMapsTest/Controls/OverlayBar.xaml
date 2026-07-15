@@ -82,29 +82,21 @@
         </ResourceDictionary>
     </UserControl.Resources>
 
-    <!-- Transparent root: only the tab + bar draw, so the map shows through beside the tab. -->
+    <!-- Transparent root: only the tab + bar draw, so the map shows through beside the tab.
+         This control is ONLY the chrome (tab + bar). The floating windows that pop above it (the temporal
+         settings cards, the app settings card, the site explorer) are NOT hosted here — they live in
+         MainWindow's floating layer, the row directly above this control, so every one of them shares the
+         same FloatingWindowMargin off the bar and the window edges. -->
     <Grid>
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/> <!-- floating settings card (above the bar; collapses when none) -->
             <RowDefinition Height="Auto"/> <!-- pull-tab -->
             <RowDefinition Height="Auto"/> <!-- overlay bar (collapses when hidden) -->
         </Grid.RowDefinitions>
 
-        <!-- Card slot: a temporal feature's settings card floats here, just above the bar. Filled by the
-             host (see CardContent — MainWindow drops the TemporalCards section in). Left-aligned so it
-             rises near the toggles' cogs and clears the centered pull-tab; nothing draws when no card. -->
-        <ContentPresenter x:Name="CardHost" Grid.Row="0" HorizontalAlignment="Left"
-                          Margin="0,0,0,6" Content="{x:Bind CardContent, Mode=OneWay}"/>
-
-        <!-- App-settings card slot: the mirror of CardHost on the RIGHT, rising near the settings cog on
-             the bar's right edge. App-wide (independent of the temporal cards); collapses when none. -->
-        <ContentPresenter x:Name="SettingsCardHost" Grid.Row="0" HorizontalAlignment="Right"
-                          Margin="0,0,0,6" Content="{x:Bind SettingsCardContent, Mode=OneWay}"/>
-
         <!-- The bar itself: a content slot the host fills (see BarContent). Collapses when hidden. Its top
              border + the tab's left/top/right border (below) share ONE brush and merge where the tab meets
              the bar, so the hairline runs along the bar top and wraps AROUND the tab (never through it). -->
-        <Border x:Name="BarBorder" Grid.Row="2" Background="{ThemeResource OverlayBarSurfaceBrush}"
+        <Border x:Name="BarBorder" Grid.Row="1" Background="{ThemeResource OverlayBarSurfaceBrush}"
                 BorderThickness="0,1,0,0"
                 Visibility="{x:Bind VisibleWhen(IsOverlayBarVisible), Mode=OneWay}"
                 BorderBrush="{ThemeResource CardStrokeColorDefaultSolidBrush}" Padding="16,10">
@@ -114,7 +106,7 @@
         <!-- Centered pull-tab: reads Hide (bar showing) / Show (bar hidden). A flat-bottomed tab with a
              left/top/right border (OverlayBarTabStyle) that laps -1px over the bar's top border, so the
              two merge into one hairline that wraps around the tab. -->
-        <Button x:Name="TabButton" Grid.Row="1" Style="{StaticResource OverlayBarTabStyle}"
+        <Button x:Name="TabButton" Grid.Row="0" Style="{StaticResource OverlayBarTabStyle}"
                 Click="OnToggleOverlayBarClick"
                 ToolTipService.ToolTip="Show / hide the loop controls">
             <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">

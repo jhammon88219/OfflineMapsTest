@@ -25,13 +25,16 @@ namespace OfflineMapsTest.Services
 		Task<IReadOnlyList<string>> GetRecentKeysAsync(RadarSite site, int count, CancellationToken cancellationToken = default);
 
 		/// <summary>
-		/// Convenience for the Radar Site Explorer's detail pane: resolves the site's single newest
-		/// archive volume and ensures its lowest tilt is cached, returning the <see cref="RadarVolume"/>
-		/// (whose <see cref="RadarVolume.VolumeTime"/> is the latest scan time and
-		/// <see cref="RadarVolume.ModeText"/> the VCP/scan mode). Null when the site has no recent data.
-		/// One listing + a range-GET prefix (cached), so it's the "brief spinner" cost of a single frame.
+		/// The freshest scan known for a site (the Radar Site Explorer's detail pane): when it was
+		/// collected + the VCP/scan-mode line. Null when the site has no recent data.
+		///
+		/// Consults BOTH feeds, because they disagree by design: the archive bucket runs ~5-10 min behind
+		/// while the near-real-time chunks bucket is ~1-2 min (which is what the loop's live frame shows).
+		/// The time is whichever is fresher; the mode comes from the cached archive tilt. Costs a listing +
+		/// a range-GET prefix (cached) + a chunks LISTING — no chunk downloads, so it never disturbs the
+		/// live-frame cache of a loop running on another site.
 		/// </summary>
-		Task<RadarVolume?> GetLatestVolumeAsync(RadarSite site, CancellationToken cancellationToken = default);
+		Task<RadarScanInfo?> GetLatestScanAsync(RadarSite site, CancellationToken cancellationToken = default);
 
 		/// <summary>
 		/// Returns the keys of every volume for the site whose scan time falls within the given UTC

@@ -3,7 +3,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Data;
 using Microsoft.UI.Xaml.Media;
 
-namespace OfflineMapsTest.Controls
+namespace OfflineMapsTest.Converters
 {
 	/// <summary>
 	/// Maps <see cref="ViewModels.RadarSiteRow.IsOffline"/> (bool) to a status-dot brush: offline =

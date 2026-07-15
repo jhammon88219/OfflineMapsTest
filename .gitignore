@@ -365,3 +365,8 @@ FodyWeavers.xsd
 # Curated DOW (mobile-radar) frames — large research-data exports (CC/attribution), generated
 # locally via tools/dow_import.py. Don't commit the data; the folder + its README are kept.
 OfflineMapsTest/Assets/DowEvents/*.dow.json
+# Claude Code working notes: the project brain (CLAUDE.md) and its deep-dive docs.
+# Deliberately untracked and purged from history -- local-only by choice.
+# NOTE: this makes them the only unbacked-up artifact here. Keep a copy somewhere safe.
+/CLAUDE.md
+/docs/

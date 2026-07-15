@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Text.Json;
 using Microsoft.Web.WebView2.Core;
 using OfflineMapsTest.ViewModels;
@@ -92,7 +93,21 @@ namespace OfflineMapsTest
 					return;
 				}
 
-				// The active product's color ramp (pushed from radar-ramps.js) — feeds the legend.
+				// The FULL ramp table keyed by product id (pushed once when radar-ramps.js loads) — lets the
+				// Product combo draw every product's scale next to its name, not just the active one.
+				if (type == "radarRamps")
+				{
+					if (root.TryGetProperty("ramps", out var rampsEl))
+					{
+						var ramps = JsonSerializer.Deserialize<Dictionary<string, Models.RadarRampInfo>>(
+							rampsEl.GetRawText(),
+							new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+						_viewModel.Radar.SetAllRamps(ramps);
+					}
+					return;
+				}
+
+				// The active product's color ramp (pushed from radar-ramps.js) — feeds the inspect marker.
 				if (type == "radarRamp")
 				{
 					if (root.TryGetProperty("ramp", out var rampEl))

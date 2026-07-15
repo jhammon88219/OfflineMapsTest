@@ -40,99 +40,31 @@
         <Grid Grid.Column="0"
               HorizontalAlignment="Right"
               VerticalAlignment="Center"
-              Width="240"
+              Width="350"
               RowSpacing="8">
             <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/> <!-- legend block -->
-                <RowDefinition Height="Auto"/> <!-- Product / Tilt -->
+                <RowDefinition Height="Auto"/> <!-- Product (carries its own ramp/legend) / Tilt -->
                 <RowDefinition Height="Auto"/> <!-- Sites / Inspect -->
             </Grid.RowDefinitions>
 
-            <!-- Color-scale legend for the selected product (Reflectivity / Velocity / CC). Generated from
-                 the ramp the WebView pushes (radar-ramps.js) so it always matches the painted gates. The
-                 footprint is ALWAYS present (not gated on HasColorScale): before a ramp is known a muted
-                 "ghost" bar holds the width so the left cluster doesn't jump when the real ramp fills in. -->
-            <Grid Grid.Row="0" RowSpacing="4">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/> <!-- bar + inspect tick -->
-                    <RowDefinition Height="Auto"/> <!-- numerical scale ticks -->
-                </Grid.RowDefinitions>
-
-                <!-- Bar + inspect tick share one cell; the tick is placed by proportional star columns
-                     (InspectLeftStar/RightStar) so it tracks the value regardless of the bar's width. -->
-                <Grid Grid.Row="0" Height="16">
-                    <!-- Ghost placeholder: shown only until a real ramp is known, reserving the bar's size. -->
-                    <Border Height="12"
-                            VerticalAlignment="Center"
-                            CornerRadius="3"
-                            BorderThickness="0.5"
-                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                            Background="{ThemeResource ControlFillColorSecondaryBrush}"
-                            Visibility="{x:Bind GhostVisibility(ViewModel.HasColorScale), Mode=OneWay}"/>
-                    <!-- Real ramp: shown once HasColorScale, overlaying (replacing) the ghost. -->
-                    <Border Height="12"
-                            VerticalAlignment="Center"
-                            CornerRadius="3"
-                            BorderThickness="0.5"
-                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                            Background="{x:Bind RampBrush(ViewModel.CurrentRamp), Mode=OneWay}"
-                            Visibility="{x:Bind VisibleWhen(ViewModel.HasColorScale), Mode=OneWay}"/>
-                    <Grid Visibility="{x:Bind VisibleWhen(ViewModel.IsInspectMarkerVisible), Mode=OneWay}">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="{x:Bind InspectLeftStar(ViewModel.InspectFraction), Mode=OneWay}"/>
-                            <ColumnDefinition Width="{x:Bind InspectRightStar(ViewModel.InspectFraction), Mode=OneWay}"/>
-                        </Grid.ColumnDefinitions>
-                        <!-- Live inspect marker: a thin tick at the column boundary = the value under the
-                             cursor's fraction along the ramp. -->
-                        <Border Grid.Column="1"
-                                Width="2"
-                                Height="16"
-                                HorizontalAlignment="Left"
-                                Margin="-1,0,0,0"
-                                Background="{ThemeResource TextFillColorPrimaryBrush}"/>
-                    </Grid>
-                </Grid>
-
-                <!-- Numerical scale for the ramp: low / mid / high tick values under the bar. The high
-                     tick also carries the unit (dBZ / mph / ρHV) so the reader knows what the numbers are. -->
-                <Grid Grid.Row="1">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="Auto"/>
-                    </Grid.ColumnDefinitions>
-                    <TextBlock Grid.Column="0"
-                               Text="{x:Bind RampScaleMin(ViewModel.CurrentRamp), Mode=OneWay}"
-                               FontSize="11"
-                               HorizontalAlignment="Left"
-                               Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
-                    <TextBlock Grid.Column="1"
-                               Text="{x:Bind RampScaleMid(ViewModel.CurrentRamp), Mode=OneWay}"
-                               FontSize="11"
-                               HorizontalAlignment="Center"
-                               Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
-                    <TextBlock Grid.Column="2"
-                               Text="{x:Bind RampScaleMax(ViewModel.CurrentRamp), Mode=OneWay}"
-                               FontSize="11"
-                               HorizontalAlignment="Right"
-                               Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
-                </Grid>
-            </Grid>
-
             <!-- Product + Tilt share one row (equal columns). -->
-            <Grid Grid.Row="1" ColumnSpacing="8">
+            <Grid Grid.Row="0" ColumnSpacing="8">
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="4*"/>
+                    <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
                 <!-- Data-driven from ViewModel.RadarProductOptions (mirrors the JS radar-products.js
-                     registry) so adding a product grows the dropdown with no XAML change. -->
-                <ComboBox Grid.Column="0"
-                          Style="{StaticResource NoBackgroundComboBoxStyle}"
+                     registry) so adding a product grows the dropdown with no XAML change. The style draws
+                     each product's COLOR RAMP next to its short name — the selector IS the legend, which is
+                     why there's no separate Color Scale block. The inspect tick rides the closed ramp, passed
+                     in via the attached properties (a template can only bind its TemplatedParent). -->
+                <controls:HandCursorComboBox Grid.Column="0"
+                          Style="{StaticResource ProductRampComboBoxStyle}"
                           HorizontalAlignment="Stretch"
                           ItemsSource="{x:Bind ViewModel.RadarProductOptions}"
-                          DisplayMemberPath="Label"
-                          SelectedIndex="{x:Bind ViewModel.RadarProductIndex, Mode=TwoWay}"/>
+                          SelectedIndex="{x:Bind ViewModel.RadarProductIndex, Mode=TwoWay}"
+                          controls:ProductRampCombo.InspectFraction="{x:Bind ViewModel.InspectFraction, Mode=OneWay}"
+                          controls:ProductRampCombo.IsInspectVisible="{x:Bind ViewModel.IsInspectMarkerVisible, Mode=OneWay}"/>
                 <ComboBox Grid.Column="1"
                           Style="{StaticResource NoBackgroundComboBoxStyle}"
                           HorizontalAlignment="Stretch"
@@ -144,7 +76,7 @@
             </Grid>
 
             <!-- Show/hide sites + Inspect share one row (equal columns). -->
-            <Grid Grid.Row="2" ColumnSpacing="8">
+            <Grid Grid.Row="1" ColumnSpacing="8">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="*"/>
@@ -297,7 +229,7 @@
         <Grid Grid.Column="2"
               HorizontalAlignment="Left"
               VerticalAlignment="Center"
-              Width="260"
+              Width="350"
               ColumnSpacing="8"
               RowSpacing="3">
             <!-- A reader shouldn't have to already know radar jargon to tell what's what — each label
