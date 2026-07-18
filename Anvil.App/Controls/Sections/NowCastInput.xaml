@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- NowCastInput — the body of the NowCast (live radar) settings card floating above the overlay bar.
+     Holds the "now"-oriented live-conditions options. Today: the SPC Watch boxes (Tornado / Severe
+     Thunderstorm) — active, event-driven current-conditions alerts, so they live under NowCast rather
+     than ForeCast, both in the UI and in the VM layer (their own WatchesViewModel). Laid out with grids
+     ([label | control] rows, no StackPanels) so more live settings drop in as new rows. Bound to the
+     coordinator MapViewModel. -->
+<UserControl x:Class="Anvil.Controls.Sections.NowCastInput"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             mc:Ignorable="d">
+
+    <UserControl.Resources>
+        <Style x:Key="NowLabelStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Foreground" Value="{ThemeResource TextFillColorTertiaryBrush}"/>
+        </Style>
+    </UserControl.Resources>
+
+    <!-- Outer grid: label column + control column, one row per option. -->
+    <Grid ColumnSpacing="12" RowSpacing="10" VerticalAlignment="Top">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="Auto"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/> <!-- Watches -->
+            <RowDefinition Height="Auto"/> <!-- Watch opacity -->
+        </Grid.RowDefinitions>
+
+        <!-- Watches: active Tornado / Severe Thunderstorm watch boxes. -->
+        <TextBlock Grid.Row="0" Grid.Column="0" Text="Watches" Style="{StaticResource NowLabelStyle}"/>
+        <CheckBox Grid.Row="0" Grid.Column="1"
+                  Content="Tornado / Severe Thunderstorm"
+                  MinWidth="0"
+                  VerticalAlignment="Center"
+                  IsChecked="{x:Bind ViewModel.Watches.ShowWatches, Mode=TwoWay}"
+                  ToolTipService.ToolTip="Show active Tornado / Severe Thunderstorm watch boxes"/>
+
+        <!-- Opacity: overall watch-polygon opacity (fill + outline together). -->
+        <TextBlock Grid.Row="1" Grid.Column="0" Text="Opacity" Style="{StaticResource NowLabelStyle}"/>
+        <Slider Grid.Row="1" Grid.Column="1"
+                Width="180" HorizontalAlignment="Left"
+                Minimum="0" Maximum="1"
+                StepFrequency="0.05" SmallChange="0.05"
+                IsThumbToolTipEnabled="False"
+                VerticalAlignment="Center"
+                Value="{x:Bind ViewModel.Watches.WatchesOpacity, Mode=TwoWay}"
+                ToolTipService.ToolTip="Overall opacity of the watch polygons"/>
+    </Grid>
+</UserControl>

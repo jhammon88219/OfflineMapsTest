@@ -15,9 +15,9 @@ import pyart
 
 BUCKET = "https://unidata-nexrad-level2.s3.amazonaws.com/"
 S3 = "{http://s3.amazonaws.com/doc/2006-03-01/}"
-UA = "OfflineMapsTest/1.0 (jhammon88219@gmail.com)"
+UA = "Anvil/1.0 (jhammon88219@gmail.com)"
 DAY = datetime.date(2026, 7, 8)  # a recent day to enumerate sites with data; bump when regenerating
-OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "OfflineMapsTest", "Assets", "tdwr-sites.json")
+OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "Anvil.App", "Assets", "tdwr-sites.json")
 
 
 def get(url):

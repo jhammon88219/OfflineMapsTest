@@ -7,7 +7,7 @@
   `cd tools/TiltCheck && dotnet run -- KTLX 2025/07/15 18`. It reports, per designed tilt: extracted
   size, radial count, the angles actually present, azimuth coverage, and whether both moments survived
   — plus a dump of the cuts the volume ACTUALLY contains, which is the ground truth the extractor has
-  to match. It **links `OfflineMapsTest/Services/Level2Format.cs`** rather than copying it (compiled
+  to match. It **links `Anvil.App/Services/Level2Format.cs`** rather than copying it (compiled
   into the same assembly, so `internal` is visible), so it can't drift from what ships, and it
   re-derives radials by independently hunting Message-31 header signatures rather than trusting the
   extractor's bookkeeping — which is what caught a bug the extractor reported as success. Run it before

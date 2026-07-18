@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "Anvil (Package)": {
+      "commandName": "MsixPackage"
+    },
+    "Anvil (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}

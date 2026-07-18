@@ -56,7 +56,7 @@ def download(key):
 
 
 # --- Python mirror of the JS `dealiasSweep` (v2, Py-ART region-based). Keep in sync with -----------
-# --- OfflineMapsTest/Assets/Map/js/radar-decode.js if you change the algorithm. --------------------
+# --- Anvil.App/Assets/Map/js/radar-decode.js if you change the algorithm. --------------------
 def _find_regions(raw, nyq, splits=3):
     """Bin the Nyquist interval into `splits` bands; label connected comps within each band."""
     N, G = raw.shape

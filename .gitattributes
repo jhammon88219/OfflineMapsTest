@@ -71,4 +71,4 @@
 # vendored excludes them from the language breakdown so it reflects the code we
 # actually wrote. See Assets/Map/README.md for what each file is and why it's JS.
 ###############################################################################
-OfflineMapsTest/Assets/Map/vendor/** linguist-vendored
+Anvil.App/Assets/Map/vendor/** linguist-vendored

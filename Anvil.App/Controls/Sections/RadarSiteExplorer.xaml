@@ -1,0 +1,246 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- RadarSiteExplorer — a non-modal, searchable master–detail browser over the WHOLE radar network the
+     app can access (operational WSR-88D, research/test, TDWR). Floats over the map (map stays live),
+     opened by the "Sites" button on the bar (left of the Settings cog). Shares the OverlayBar surface
+     chrome but is its own larger footprint (not a fixed ControlCard). Bound to the coordinator
+     MapViewModel (like AppSettingsCard): it reaches into ViewModel.SiteExplorer.* for the list/detail
+     and ViewModel.IsSiteExplorerOpen for its own visibility/close. -->
+<UserControl x:Class="Anvil.Controls.Sections.RadarSiteExplorer"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ctl="using:Anvil.Controls"
+             xmlns:conv="using:Anvil.Converters"
+             xmlns:vm="using:Anvil.ViewModels"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             mc:Ignorable="d">
+
+    <UserControl.Resources>
+        <conv:OfflineToBrushConverter x:Key="OfflineToBrush"/>
+
+        <!-- Small caps field label in the detail pane. -->
+        <Style x:Key="FieldLabelStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="CharacterSpacing" Value="40"/>
+            <Setter Property="Foreground" Value="{ThemeResource TextFillColorTertiaryBrush}"/>
+        </Style>
+        <Style x:Key="FieldValueStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+            <Setter Property="Foreground" Value="{ThemeResource TextFillColorPrimaryBrush}"/>
+        </Style>
+    </UserControl.Resources>
+
+    <!-- Root Grid -->
+    <Grid Visibility="{x:Bind VisibleWhen(ViewModel.IsSiteExplorerOpen), Mode=OneWay}">
+        <Border Width="660" Height="470"
+                Background="{ThemeResource OverlayBarSurfaceBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultSolidBrush}"
+                BorderThickness="1"
+                CornerRadius="10">
+            <Grid Margin="16,12,16,14"
+                  RowSpacing="10">
+                
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/> <!-- header -->
+                    <RowDefinition Height="Auto"/> <!-- search + filters -->
+                    <RowDefinition Height="*"/>    <!-- body: list | detail -->
+                </Grid.RowDefinitions>
+
+                <!-- Header: title + count, close triangle at right. -->
+                <Grid Grid.Row="0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Text="Radar Sites"
+                               FontSize="15" FontWeight="SemiBold" CharacterSpacing="40"
+                               VerticalAlignment="Center"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                    <TextBlock Grid.Column="1" Margin="12,0,0,0"
+                               Text="{x:Bind ViewModel.SiteExplorer.ResultCountText, Mode=OneWay}"
+                               FontSize="12" VerticalAlignment="Center"
+                               Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                    <Button Grid.Column="2" Click="OnCloseClick"
+                            Width="28" Height="24" Padding="0" MinWidth="0" MinHeight="0"
+                            CornerRadius="6" Background="Transparent" BorderThickness="0"
+                            ToolTipService.ToolTip="Hide the site explorer">
+                        <FontIcon Glyph="&#xE70D;" FontFamily="Segoe Fluent Icons,Segoe MDL2 Assets" FontSize="12"/>
+                    </Button>
+                </Grid>
+
+                <!-- Search + filters. -->
+                <Grid Grid.Row="1" ColumnSpacing="10">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBox Grid.Column="0"
+                             PlaceholderText="Search ICAO or name…"
+                             Text="{x:Bind ViewModel.SiteExplorer.SearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
+                    <ComboBox Grid.Column="1" MinWidth="130"
+                              SelectedIndex="{x:Bind ViewModel.SiteExplorer.SelectedClassIndex, Mode=TwoWay}"
+                              ToolTipService.ToolTip="Filter by network">
+                        <ComboBoxItem Content="All networks"/>
+                        <ComboBoxItem Content="Operational"/>
+                        <ComboBoxItem Content="Research"/>
+                        <ComboBoxItem Content="TDWR"/>
+                    </ComboBox>
+                    <CheckBox Grid.Column="2" Content="Online only"
+                              VerticalAlignment="Center"
+                              IsChecked="{x:Bind ViewModel.SiteExplorer.OnlineOnly, Mode=TwoWay}"/>
+                </Grid>
+
+                <!-- Body: site list (left) | detail (right). -->
+                <Grid Grid.Row="2"
+                      ColumnSpacing="14">
+                    
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="260"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+
+                    <!-- Left: the filtered site list. -->
+                    <Border Grid.Column="0"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultSolidBrush}"
+                            BorderThickness="1" CornerRadius="8">
+                        <ListView ItemsSource="{x:Bind ViewModel.SiteExplorer.FilteredSites, Mode=OneWay}"
+                                  SelectedItem="{x:Bind ViewModel.SiteExplorer.SelectedSite, Mode=TwoWay}"
+                                  SelectionMode="Single">
+                            <ListView.ItemContainerStyle>
+                                <Style TargetType="ListViewItem">
+                                    <Setter Property="Padding" Value="10,6"/>
+                                    <Setter Property="MinHeight" Value="0"/>
+                                </Style>
+                            </ListView.ItemContainerStyle>
+                            <ListView.ItemTemplate>
+                                <DataTemplate x:DataType="vm:RadarSiteRow">
+                                    <Grid ColumnSpacing="8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <!-- Status dot (online/offline). -->
+                                        <Ellipse Grid.Column="0" Width="9" Height="9" VerticalAlignment="Center"
+                                                 Fill="{x:Bind IsOffline, Converter={StaticResource OfflineToBrush}, Mode=OneWay}"/>
+                                        <StackPanel Grid.Column="1">
+                                            <TextBlock Text="{x:Bind Id}" FontWeight="SemiBold" FontSize="13"/>
+                                            <TextBlock Text="{x:Bind Name}" FontSize="11"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                                        </StackPanel>
+                                        <TextBlock Grid.Column="2" Text="{x:Bind ClassLabel}" FontSize="10"
+                                                   VerticalAlignment="Center"
+                                                   Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                                    </Grid>
+                                </DataTemplate>
+                            </ListView.ItemTemplate>
+                        </ListView>
+                    </Border>
+
+                    <!-- Right: detail pane for the selected site. -->
+                    <Grid Grid.Column="1">
+                        <!-- Empty hint when nothing is selected. -->
+                        <TextBlock Text="Select a site to see its details."
+                                   VerticalAlignment="Center" 
+                                   HorizontalAlignment="Center"
+                                   Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                   Visibility="{x:Bind CollapsedWhen(ViewModel.SiteExplorer.HasSelection), Mode=OneWay}"/>
+
+                        <Grid RowSpacing="10"
+                              VerticalAlignment="Top"
+                              Visibility="{x:Bind VisibleWhen(ViewModel.SiteExplorer.HasSelection), Mode=OneWay}">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/> <!-- title -->
+                                <RowDefinition Height="Auto"/> <!-- network + status -->
+                                <RowDefinition Height="Auto"/> <!-- coords -->
+                                <RowDefinition Height="Auto"/> <!-- distance -->
+                                <RowDefinition Height="Auto"/> <!-- latest scan -->
+                                <RowDefinition Height="Auto"/> <!-- vcp/mode -->
+                                <RowDefinition Height="*"/>    <!-- spacer -->
+                                <RowDefinition Height="Auto"/> <!-- load button -->
+                            </Grid.RowDefinitions>
+
+                            <StackPanel Grid.Row="0">
+                                <TextBlock Text="{x:Bind ViewModel.SiteExplorer.DetailId, Mode=OneWay}"
+                                           FontSize="22" FontWeight="Bold"/>
+                                <TextBlock Text="{x:Bind ViewModel.SiteExplorer.DetailName, Mode=OneWay}"
+                                           FontSize="13"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                            </StackPanel>
+
+                            <Grid Grid.Row="1" ColumnSpacing="24">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" Spacing="2">
+                                    <TextBlock Text="NETWORK" Style="{StaticResource FieldLabelStyle}"/>
+                                    <TextBlock Text="{x:Bind ViewModel.SiteExplorer.DetailClassLabel, Mode=OneWay}"
+                                               Style="{StaticResource FieldValueStyle}"/>
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Spacing="2">
+                                    <TextBlock Text="STATUS" Style="{StaticResource FieldLabelStyle}"/>
+                                    <StackPanel Orientation="Horizontal" Spacing="6">
+                                        <Ellipse Width="9" Height="9" VerticalAlignment="Center"
+                                                 Fill="{x:Bind SelectedStatusBrush(ViewModel.SiteExplorer.SelectedSite), Mode=OneWay}"/>
+                                        <TextBlock Text="{x:Bind ViewModel.SiteExplorer.DetailStatusText, Mode=OneWay}"
+                                                   Style="{StaticResource FieldValueStyle}"/>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Grid>
+
+                            <StackPanel Grid.Row="2" Spacing="2">
+                                <TextBlock Text="COORDINATES" Style="{StaticResource FieldLabelStyle}"/>
+                                <TextBlock Text="{x:Bind ViewModel.SiteExplorer.DetailCoords, Mode=OneWay}"
+                                           Style="{StaticResource FieldValueStyle}"/>
+                            </StackPanel>
+
+                            <TextBlock Grid.Row="3"
+                                       Text="{x:Bind ViewModel.SiteExplorer.DetailDistanceText, Mode=OneWay}"
+                                       FontSize="12"
+                                       Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+
+                            <StackPanel Grid.Row="4"
+                                        Spacing="2">
+                                <!-- Latest Scan -->
+                                <TextBlock Text="LATEST SCAN"
+                                           Style="{StaticResource FieldLabelStyle}"/>
+                                <!-- Spinner and value share ONE cell so the ring never indents the value: laid
+                                     out side by side, an inactive ring still reserves its width and pushed this
+                                     line out of line with every other field. They can't collide — the value is
+                                     empty for exactly as long as the fetch is in flight (see LatestScanText). -->
+                                <Grid>
+                                    <TextBlock Text="{x:Bind ViewModel.SiteExplorer.LatestScanText, Mode=OneWay}"
+                                               Style="{StaticResource FieldValueStyle}"/>
+                                    <ProgressRing Width="14"
+                                                  Height="14"
+                                                  HorizontalAlignment="Left"
+                                                  VerticalAlignment="Center"
+                                                  IsActive="{x:Bind ViewModel.SiteExplorer.IsLoadingScanInfo, Mode=OneWay}"
+                                                  Visibility="{x:Bind VisibleWhen(ViewModel.SiteExplorer.IsLoadingScanInfo), Mode=OneWay}"/>
+                                </Grid>
+                            </StackPanel>
+
+                            <StackPanel Grid.Row="5" Spacing="2">
+                                <TextBlock Text="SCAN MODE (VCP)" Style="{StaticResource FieldLabelStyle}"/>
+                                <TextBlock Text="{x:Bind ViewModel.SiteExplorer.VcpModeText, Mode=OneWay}"
+                                           Style="{StaticResource FieldValueStyle}"/>
+                            </StackPanel>
+
+                            <Button Grid.Row="7" HorizontalAlignment="Stretch"
+                                    Click="OnLoadClick"
+                                    Style="{StaticResource AccentButtonStyle}"
+                                    Content="Load on map"
+                                    IsEnabled="{x:Bind ViewModel.SiteExplorer.HasSelection, Mode=OneWay}"/>
+                        </Grid>
+                    </Grid>
+                </Grid>
+            </Grid>
+        </Border>
+    </Grid>
+</UserControl>

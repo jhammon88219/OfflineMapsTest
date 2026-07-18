@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window
+    x:Class="Anvil.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:Anvil"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:controls="using:Microsoft.UI.Xaml.Controls"
+    xmlns:models="using:Anvil.Models"
+    xmlns:vm="using:Anvil.ViewModels"
+    xmlns:ctl="using:Anvil.Controls"
+    xmlns:sections="using:Anvil.Controls.Sections"
+    mc:Ignorable="d"
+    Title="Anvil">
+
+    <!-- The map fills the whole window; UI (the transport bar + the floating windows) sits on top as an
+         overlay, so showing/hiding the bar never changes the map's size.
+
+         Two overlay rows, and the split is what keeps every floating window aligned:
+           Row 0 — the FLOATING LAYER. Every window that pops over the map lives here, bottom-aligned with
+                   the shared FloatingWindowMargin. Because the row ends where the bar's chrome begins, one
+                   margin buys each window the same inset from the window edges AND the same gap above the
+                   bar — no window hardcodes a guess at the bar's height (which is what let the site
+                   explorer overlap it).
+           Row 1 — the OverlayBar chrome (pull-tab + bar), auto-sized, pinned to the bottom.
+         The map spans both rows, so the layer boundary is invisible and costs the map nothing. -->
+    <Grid Background="#FF0A0A0A">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*"/>    <!-- floating layer: the windows that pop over the map -->
+            <RowDefinition Height="Auto"/> <!-- the OverlayBar chrome (tab + bar) -->
+        </Grid.RowDefinitions>
+
+        <!-- Full-window map (bottom layer; all UI overlays float on top of it). -->
+        <controls:WebView2 x:Name="MainMapWebView" Grid.Row="0" Grid.RowSpan="2"/>
+
+        <!-- ===== Row 0: the floating windows. All bottom-aligned, all on FloatingWindowMargin. ===== -->
+
+        <!-- Temporal settings cards (Past / Now / Fore), shown when a toggle's cog is clicked. Left,
+             so each card rises near the cog that opened it. -->
+        <sections:TemporalCards Grid.Row="0" VerticalAlignment="Bottom" HorizontalAlignment="Left"
+                                Margin="{StaticResource FloatingWindowMargin}"
+                                ViewModel="{x:Bind ViewModel}"/>
+
+        <!-- App-wide settings card, the mirror of the temporal cards; opened by the bar's right-edge cog. -->
+        <sections:AppSettingsCard Grid.Row="0" VerticalAlignment="Bottom" HorizontalAlignment="Right"
+                                  Margin="{StaticResource FloatingWindowMargin}"
+                                  ViewModel="{x:Bind ViewModel}"/>
+
+        <!-- Radar Site Explorer: a non-modal panel over the map (the map stays live). A larger free panel
+             rather than a small cog-anchored card, but it floats on the same layer + margin as the cards.
+             Its own visibility follows ViewModel.IsSiteExplorerOpen. -->
+        <sections:RadarSiteExplorer Grid.Row="0" VerticalAlignment="Bottom" HorizontalAlignment="Right"
+                                    Margin="{StaticResource FloatingWindowMargin}"
+                                    ViewModel="{x:Bind ViewModel}"/>
+
+        <!-- ===== Row 1: the bar chrome. BarContent holds the bar's own controls — left: temporal
+             split-toggles; center: loop controls + product; right: Sites + Settings. ===== -->
+        <ctl:OverlayBar Grid.Row="1">
+            <ctl:OverlayBar.BarContent>
+                <!-- Single overlay cell: RadarControls STRETCHES to full bar width and centers its own
+                     transport at window-center (its internal * | Auto | * grid does the centering); the
+                     temporal toggles float OVER the left empty edge in the same cell. Overlaying them —
+                     rather than giving them their own grid columns — means the transport's position is
+                     driven purely by RadarControls, so the edge section can't shift it. Per-feature
+                     options now live in the floating settings cards (CardContent), not a right region. -->
+                <Grid>
+                    <!-- Full-width: the whole radar console (transport + display + site), self-centering. -->
+                    <sections:RadarControls HorizontalAlignment="Stretch"
+                                            VerticalAlignment="Center"
+                                            ViewModel="{x:Bind ViewModel.Radar}"/>
+                    <!-- Left: temporal split-toggles (feature + settings cog), overlaid on the left edge. -->
+                    <sections:TemporalToggles HorizontalAlignment="Left"
+                                              VerticalAlignment="Center"
+                                              ViewModel="{x:Bind ViewModel}"/>
+                    <!-- Right: the Radar Site Explorer button + the app-wide settings cog, overlaid on the
+                         right empty edge (mirror of the temporal toggles). Sites sits LEFT of Settings.
+                         Each latches while its panel/card is open. -->
+                    <StackPanel HorizontalAlignment="Right" VerticalAlignment="Center"
+                                Orientation="Horizontal" Spacing="10">
+                        <StackPanel Orientation="Vertical" Spacing="5">
+                            <TextBlock Text="Sites" FontSize="11" FontWeight="SemiBold"
+                                       CharacterSpacing="60" HorizontalAlignment="Center"
+                                       Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                            <ToggleButton Width="40" Height="40" MinWidth="0" MinHeight="0" Padding="0"
+                                          CornerRadius="6"
+                                          HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                                          FontFamily="Segoe Fluent Icons,Segoe MDL2 Assets" FontSize="18"
+                                          Content="&#xE81E;"
+                                          ToolTipService.ToolTip="Radar site explorer"
+                                          IsChecked="{x:Bind ViewModel.IsSiteExplorerOpen, Mode=TwoWay}"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Vertical" Spacing="5">
+                            <TextBlock Text="Settings" FontSize="11" FontWeight="SemiBold"
+                                       CharacterSpacing="60" HorizontalAlignment="Center"
+                                       Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                            <ToggleButton Width="40" Height="40" MinWidth="0" MinHeight="0" Padding="0"
+                                          CornerRadius="6"
+                                          HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                                          FontFamily="Segoe Fluent Icons,Segoe MDL2 Assets" FontSize="18"
+                                          Content="&#xE713;"
+                                          ToolTipService.ToolTip="App settings"
+                                          IsChecked="{x:Bind ViewModel.IsSettingsCardOpen, Mode=TwoWay}"/>
+                        </StackPanel>
+                    </StackPanel>
+                </Grid>
+            </ctl:OverlayBar.BarContent>
+        </ctl:OverlayBar>
+    </Grid>
+</Window>

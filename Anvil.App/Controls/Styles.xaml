@@ -1,0 +1,343 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Shared, app-wide styles. Merged in App.xaml so any control/window can reference these by key.
+     Add reusable Styles / brushes here rather than inlining them in a single control's Resources. -->
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:ctl="using:Anvil.Controls">
+
+    <!-- ================================ Overlay surface brushes ================================
+         The opaque, theme-aware surface (+ hover) used by the bottom OverlayBar AND the floating
+         temporal settings cards that pop above it, so the two read as one system in Win11 light/dark.
+         Defined app-wide (here) rather than inside a single control so both reference the SAME keys and
+         can't drift. (Moved out of OverlayBar.xaml's local ThemeDictionaries.) -->
+    <ResourceDictionary.ThemeDictionaries>
+        <ResourceDictionary x:Key="Default">
+            <SolidColorBrush x:Key="OverlayBarSurfaceBrush" Color="#FF000000"/>
+            <SolidColorBrush x:Key="OverlayBarSurfaceHoverBrush" Color="#FF1A1A1A"/>
+        </ResourceDictionary>
+        <ResourceDictionary x:Key="Light">
+            <SolidColorBrush x:Key="OverlayBarSurfaceBrush" Color="#FFF3F3F3"/>
+            <SolidColorBrush x:Key="OverlayBarSurfaceHoverBrush" Color="#FFE4E4E4"/>
+        </ResourceDictionary>
+        <ResourceDictionary x:Key="HighContrast">
+            <SolidColorBrush x:Key="OverlayBarSurfaceBrush" Color="{ThemeResource SystemColorButtonFaceColor}"/>
+            <SolidColorBrush x:Key="OverlayBarSurfaceHoverBrush" Color="{ThemeResource SystemColorHighlightColor}"/>
+        </ResourceDictionary>
+    </ResourceDictionary.ThemeDictionaries>
+
+    <!-- ================================ Floating window margin ================================
+         The ONE margin every floating window over the map uses (the temporal settings cards, the app
+         settings card, the radar site explorer). They all live bottom-aligned in MainWindow's floating
+         layer — the row above the OverlayBar — so this single value gives each the same inset from the
+         window edges AND the same gap above the bar's pull-tab, with no per-window hardcoding. Change
+         it here and every window moves together. -->
+    <Thickness x:Key="FloatingWindowMargin">25</Thickness>
+
+    <!-- ================================ No-background ComboBox ================================
+         A self-contained, OPT-IN minimal ComboBox: transparent box (in EVERY state — rest / hover /
+         pressed / focused / open / disabled), no border, no highlight; the closed selector blends into
+         whatever surface hosts it. Just set Style="{StaticResource NoBackgroundComboBoxStyle}" — nothing
+         else to add (no companion resources), and it affects ONLY the combos you tag.
+
+         How it stays background-less: the box paints from {TemplateBinding Background} (= Transparent) with
+         NO VisualState touching it, so there are no per-state fills to fight. The DROPDOWN popup is given
+         an explicit fully-OPAQUE, theme-aware surface (SolidBackgroundFillColor*), since the default flyout
+         brush is acrylic/translucent and washes out over the map. Dropdown ITEMS keep their normal
+         hover/selection (they're separate ComboBoxItem controls, untouched by this template). -->
+    <Style x:Key="NoBackgroundComboBoxStyle" TargetType="ComboBox">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="BorderBrush" Value="Transparent"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="Foreground" Value="{ThemeResource ComboBoxForeground}"/>
+        <Setter Property="Padding" Value="11,5,0,6"/>
+        <Setter Property="MinWidth" Value="0"/>
+        <Setter Property="HorizontalContentAlignment" Value="Left"/>
+        <Setter Property="VerticalContentAlignment" Value="Center"/>
+        <Setter Property="HorizontalAlignment" Value="Stretch"/>
+        <Setter Property="TabNavigation" Value="Once"/>
+        <Setter Property="UseSystemFocusVisuals" Value="True"/>
+        <Setter Property="ScrollViewer.HorizontalScrollMode" Value="Disabled"/>
+        <Setter Property="ScrollViewer.VerticalScrollMode" Value="Auto"/>
+        <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled"/>
+        <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Auto"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ComboBox">
+                    <Grid x:Name="LayoutRoot">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <!-- The box stays transparent in every state (see below); the ONLY state that
+                             changes anything is Disabled, which mutes the selected-item text + chevron so a
+                             disabled combo (e.g. Tilt) reads as disabled without gaining a background. -->
+                        <VisualStateManager.VisualStateGroups>
+                            <VisualStateGroup x:Name="CommonStates">
+                                <VisualState x:Name="Normal"/>
+                                <VisualState x:Name="PointerOver"/>
+                                <VisualState x:Name="Pressed"/>
+                                <VisualState x:Name="Disabled">
+                                    <VisualState.Setters>
+                                        <Setter Target="ContentPresenter.Foreground" Value="{ThemeResource ComboBoxForegroundDisabled}"/>
+                                        <Setter Target="DropDownGlyph.Foreground" Value="{ThemeResource ComboBoxDropDownGlyphForegroundDisabled}"/>
+                                    </VisualState.Setters>
+                                </VisualState>
+                            </VisualStateGroup>
+                        </VisualStateManager.VisualStateGroups>
+
+                        <!-- The box. Transparent + borderless via TemplateBinding, and no VisualState ever
+                             changes it, so it looks identical at rest, hover, pressed, focused and open. -->
+                        <Border x:Name="Background"
+                                Grid.ColumnSpan="2"
+                                MinHeight="32"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="{TemplateBinding CornerRadius}"
+                                Control.IsTemplateFocusTarget="True"/>
+
+                        <!-- Selected item. -->
+                        <ContentPresenter x:Name="ContentPresenter"
+                                Grid.Column="0"
+                                Margin="{TemplateBinding Padding}"
+                                HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
+                                Content="{TemplateBinding SelectionBoxItem}"
+                                ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"/>
+
+                        <!-- Chevron. -->
+                        <FontIcon x:Name="DropDownGlyph"
+                                Grid.Column="1"
+                                Margin="8,0,10,0"
+                                VerticalAlignment="Center"
+                                FontFamily="{ThemeResource SymbolThemeFontFamily}"
+                                FontSize="12"
+                                Glyph="&#xE70D;"
+                                Foreground="{ThemeResource ComboBoxDropDownGlyphForeground}"
+                                IsHitTestVisible="False"/>
+
+                        <!-- Dropdown popup: opaque, readable surface (NOT the default acrylic). -->
+                        <Popup x:Name="Popup">
+                            <Border x:Name="PopupBorder"
+                                    Background="{ThemeResource SolidBackgroundFillColorSecondaryBrush}"
+                                    BorderBrush="{ThemeResource SurfaceStrokeColorFlyoutBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="{ThemeResource OverlayCornerRadius}"
+                                    Padding="0,4,0,4"
+                                    MaxHeight="504"
+                                    HorizontalAlignment="Stretch">
+                                <ScrollViewer x:Name="ScrollViewer"
+                                        HorizontalScrollMode="{TemplateBinding ScrollViewer.HorizontalScrollMode}"
+                                        HorizontalScrollBarVisibility="{TemplateBinding ScrollViewer.HorizontalScrollBarVisibility}"
+                                        VerticalScrollMode="{TemplateBinding ScrollViewer.VerticalScrollMode}"
+                                        VerticalScrollBarVisibility="{TemplateBinding ScrollViewer.VerticalScrollBarVisibility}"
+                                        Foreground="{ThemeResource ComboBoxDropDownForeground}"
+                                        ZoomMode="Disabled"
+                                        AutomationProperties.AccessibilityView="Raw">
+                                    <ItemsPresenter/>
+                                </ScrollViewer>
+                            </Border>
+                        </Popup>
+                    </Grid>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- ============================ Product ramp ComboBox ============================
+         The radar Product selector, with each product's COLOR RAMP drawn next to its name — so the
+         selector doubles as the legend and the separate Color Scale section goes away.
+
+         Two different presentations, which is why this carries a full ControlTemplate:
+           • CLOSED — short name ("Ref") + a RampBar for the SELECTED product WITH its min/max values and
+             the live Inspect tick. Authored explicitly below, bound to the TemplatedParent's SelectedItem.
+           • DROPDOWN ROWS — short name + just the ramp (no numbers/tick), via ItemTemplate; the full
+             product name ("Correlation Coefficient") is the row's tooltip.
+         WinUI derives the closed "selection box" from ItemTemplate, so the two would otherwise be
+         identical — hence the hand-authored closed area. The `ContentPresenter` part is kept (ComboBox
+         looks it up) but COLLAPSED, since we draw the closed area ourselves.
+
+         Inspect state lives on the view model, and a template can only bind its TemplatedParent, so the
+         host passes it in via the ctl:ProductRampCombo attached properties (see that class).
+         Items must be ViewModels.RadarProductOption (ShortLabel / Label / Ramp). Classic {Binding} is used
+         throughout — x:Bind needs a code-behind, which a loose ResourceDictionary doesn't have. -->
+    <Style x:Key="ProductRampComboBoxStyle" TargetType="ComboBox">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="BorderBrush" Value="Transparent"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="Foreground" Value="{ThemeResource ComboBoxForeground}"/>
+        <!-- Only ever seen on hover (rest is transparent), where it rounds the fill + stroke. Set here
+             because this Style replaces the default one outright, so nothing else supplies a radius. -->
+        <Setter Property="CornerRadius" Value="6"/>
+        <Setter Property="Padding" Value="0"/>
+        <Setter Property="MinWidth" Value="0"/>
+        <Setter Property="HorizontalAlignment" Value="Stretch"/>
+        <Setter Property="VerticalContentAlignment" Value="Center"/>
+        <Setter Property="TabNavigation" Value="Once"/>
+        <Setter Property="UseSystemFocusVisuals" Value="True"/>
+        <Setter Property="ScrollViewer.HorizontalScrollMode" Value="Disabled"/>
+        <Setter Property="ScrollViewer.VerticalScrollMode" Value="Auto"/>
+        <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled"/>
+        <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Auto"/>
+        <Setter Property="ItemTemplate">
+            <Setter.Value>
+                <DataTemplate>
+                    <Grid ColumnSpacing="10" ToolTipService.ToolTip="{Binding Label}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="38"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0"
+                                   Text="{Binding ShortLabel}"
+                                   VerticalAlignment="Center"/>
+                        <ctl:RampBar Grid.Column="1"
+                                     MinWidth="96"
+                                     VerticalAlignment="Center"
+                                     Ramp="{Binding Ramp, Mode=OneWay}"/>
+                    </Grid>
+                </DataTemplate>
+            </Setter.Value>
+        </Setter>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ComboBox">
+                    <Grid x:Name="LayoutRoot">
+                        <!-- Rest is fully transparent, so hover carries the whole "this is interactable" cue:
+                             the surface fills with the SAME hover brush the bar's pull-tab uses (one hover look
+                             across the chrome), a hairline stroke appears — the fill alone is near-invisible on
+                             the bar's black — and the content lifts 1px. Pressed keeps fill + stroke but drops
+                             the lift to 0, so a click reads as pushing it back down. Only Disabled mutes the
+                             text + chevron. (The stroke costs no layout: Background is an empty backdrop pane,
+                             not the content's parent, so its BorderThickness can't shift anything.) -->
+                        <VisualStateManager.VisualStateGroups>
+                            <VisualStateGroup x:Name="CommonStates">
+                                <VisualState x:Name="Normal"/>
+                                <VisualState x:Name="PointerOver">
+                                    <VisualState.Setters>
+                                        <Setter Target="Background.Background" Value="{ThemeResource OverlayBarSurfaceHoverBrush}"/>
+                                        <Setter Target="Background.BorderBrush" Value="{ThemeResource CardStrokeColorDefaultSolidBrush}"/>
+                                        <Setter Target="Background.BorderThickness" Value="1"/>
+                                        <Setter Target="Lift.Y" Value="-1"/>
+                                    </VisualState.Setters>
+                                </VisualState>
+                                <VisualState x:Name="Pressed">
+                                    <VisualState.Setters>
+                                        <Setter Target="Background.Background" Value="{ThemeResource OverlayBarSurfaceHoverBrush}"/>
+                                        <Setter Target="Background.BorderBrush" Value="{ThemeResource CardStrokeColorDefaultSolidBrush}"/>
+                                        <Setter Target="Background.BorderThickness" Value="1"/>
+                                    </VisualState.Setters>
+                                </VisualState>
+                                <VisualState x:Name="Disabled">
+                                    <VisualState.Setters>
+                                        <Setter Target="ShortLabelText.Foreground" Value="{ThemeResource ComboBoxForegroundDisabled}"/>
+                                        <Setter Target="DropDownGlyph.Foreground" Value="{ThemeResource ComboBoxDropDownGlyphForegroundDisabled}"/>
+                                    </VisualState.Setters>
+                                </VisualState>
+                            </VisualStateGroup>
+                        </VisualStateManager.VisualStateGroups>
+
+                        <!-- Everything EXCEPT the Popup rides the lift — a transform on the shared root would
+                             drag the open dropdown up with it. -->
+                        <Grid x:Name="ContentRoot">
+                            <Grid.RenderTransform>
+                                <TranslateTransform x:Name="Lift"/>
+                            </Grid.RenderTransform>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/> <!-- short name -->
+                                <ColumnDefinition Width="*"/>    <!-- selected product's ramp + scale + tick -->
+                                <ColumnDefinition Width="Auto"/> <!-- chevron -->
+                            </Grid.ColumnDefinitions>
+
+                            <Border x:Name="Background"
+                                    Grid.ColumnSpan="3"
+                                    MinHeight="32"
+                                    Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="{TemplateBinding BorderThickness}"
+                                    CornerRadius="{TemplateBinding CornerRadius}"
+                                    Control.IsTemplateFocusTarget="True"/>
+
+                            <!-- Required part, but we draw the closed area ourselves (see the header). -->
+                            <ContentPresenter x:Name="ContentPresenter"
+                                    Grid.Column="0"
+                                    Visibility="Collapsed"
+                                    Content="{TemplateBinding SelectionBoxItem}"
+                                    ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"/>
+
+                            <!-- Short name + chevron line up with the RAMP STRIP, not with the ramp control's
+                                 overall centre — the min/max row hanging under the strip drags that centre
+                                 down, which left both sitting low against the ramp. StripAlignMargin is the
+                                 ramp's own live measurement of that offset (see RampBar), so neither hardcodes
+                                 a guess at its internals and both follow it if the scale row's metrics ever
+                                 change. The gaps AROUND the ramp are the ramp's own margin, leaving these two
+                                 free to carry only the alignment nudge. -->
+                            <TextBlock x:Name="ShortLabelText"
+                                    Grid.Column="0"
+                                    Margin="{Binding ElementName=SelectedRamp, Path=StripAlignMargin, Mode=OneWay}"
+                                    VerticalAlignment="Center"
+                                    Foreground="{TemplateBinding Foreground}"
+                                    Text="{Binding SelectedItem.ShortLabel, RelativeSource={RelativeSource TemplatedParent}}"/>
+
+                            <ctl:RampBar x:Name="SelectedRamp"
+                                    Grid.Column="1"
+                                    Margin="10,0,8,0"
+                                    VerticalAlignment="Center"
+                                    ShowScale="True"
+                                    Ramp="{Binding SelectedItem.Ramp, RelativeSource={RelativeSource TemplatedParent}, Mode=OneWay}"
+                                    InspectFraction="{Binding (ctl:ProductRampCombo.InspectFraction), RelativeSource={RelativeSource TemplatedParent}, Mode=OneWay}"
+                                    IsInspectVisible="{Binding (ctl:ProductRampCombo.IsInspectVisible), RelativeSource={RelativeSource TemplatedParent}, Mode=OneWay}"/>
+
+                            <!-- The wrapper carries the chevron's inset from the control's right edge, so the
+                                 icon itself is free to carry the bound alignment nudge. -->
+                            <Grid Grid.Column="2" Margin="0,0,2,0">
+                                <FontIcon x:Name="DropDownGlyph"
+                                        Margin="{Binding ElementName=SelectedRamp, Path=StripAlignMargin, Mode=OneWay}"
+                                        VerticalAlignment="Center"
+                                        FontFamily="{ThemeResource SymbolThemeFontFamily}"
+                                        FontSize="14"
+                                        Glyph="&#xE70D;"
+                                        Foreground="{ThemeResource ComboBoxDropDownGlyphForeground}"
+                                        IsHitTestVisible="False"/>
+                            </Grid>
+                        </Grid>
+
+                        <Popup x:Name="Popup">
+                            <Border x:Name="PopupBorder"
+                                    Background="{ThemeResource SolidBackgroundFillColorSecondaryBrush}"
+                                    BorderBrush="{ThemeResource SurfaceStrokeColorFlyoutBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="{ThemeResource OverlayCornerRadius}"
+                                    Padding="0,4,0,4"
+                                    MaxHeight="504"
+                                    HorizontalAlignment="Stretch">
+                                <ScrollViewer x:Name="ScrollViewer"
+                                        HorizontalScrollMode="{TemplateBinding ScrollViewer.HorizontalScrollMode}"
+                                        HorizontalScrollBarVisibility="{TemplateBinding ScrollViewer.HorizontalScrollBarVisibility}"
+                                        VerticalScrollMode="{TemplateBinding ScrollViewer.VerticalScrollMode}"
+                                        VerticalScrollBarVisibility="{TemplateBinding ScrollViewer.VerticalScrollBarVisibility}"
+                                        Foreground="{ThemeResource ComboBoxDropDownForeground}"
+                                        ZoomMode="Disabled"
+                                        AutomationProperties.AccessibilityView="Raw">
+                                    <ItemsPresenter/>
+                                </ScrollViewer>
+                            </Border>
+                        </Popup>
+                    </Grid>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Square transport button base: no min-size padding, centered glyph, rounded. Applied by the radar
+         transport (prev / play-stop / next) and available app-wide via Style="{StaticResource …}". -->
+    <Style x:Key="TransportButtonStyle" TargetType="Button">
+        <Setter Property="MinWidth" Value="0"/>
+        <Setter Property="MinHeight" Value="0"/>
+        <Setter Property="Padding" Value="0"/>
+        <Setter Property="CornerRadius" Value="8"/>
+        <Setter Property="HorizontalContentAlignment" Value="Center"/>
+        <Setter Property="VerticalContentAlignment" Value="Center"/>
+    </Style>
+
+</ResourceDictionary>

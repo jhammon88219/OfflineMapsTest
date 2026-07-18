@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- TemporalCards — the floating settings cards for the temporal features, hosted in the OverlayBar's
+     CardHost slot (above the bar). One card per temporal toggle (Past / Now / Fore); at most one is
+     visible at a time (driven by MapViewModel.OpenCard via the IsXCardOpen facets), opened by that
+     toggle's cog and hidden by the card's own down-triangle. Each card wraps the feature's existing
+     controls (PastEventInput / OutlookInput; Now is a placeholder until its feature is re-added). All
+     three overlap in one cell — only the open one shows — so they share the same footprint. Bound to
+     the coordinator MapViewModel. -->
+<UserControl
+    x:Class="Anvil.Controls.Sections.TemporalCards"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:ctl="using:Anvil.Controls"
+    xmlns:sections="using:Anvil.Controls.Sections"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <Grid>
+        <!-- Past Event: date / start / window form (was ContextBar's inline PastEventInput). -->
+        <ctl:ControlCard Title="Past Event"
+                         CloseRequested="OnCardCloseRequested"
+                         Visibility="{x:Bind VisibleWhen(ViewModel.IsPastCardOpen), Mode=OneWay}">
+            <ctl:ControlCard.CardBody>
+                <sections:PastEventInput ViewModel="{x:Bind ViewModel.Radar, Mode=OneWay}"/>
+            </ctl:ControlCard.CardBody>
+        </ctl:ControlCard>
+
+        <!-- Now: live radar. Hosts the "now"-oriented options (today: SPC watch boxes). -->
+        <ctl:ControlCard Title="Live Radar"
+                         CloseRequested="OnCardCloseRequested"
+                         Visibility="{x:Bind VisibleWhen(ViewModel.IsNowCardOpen), Mode=OneWay}">
+            <ctl:ControlCard.CardBody>
+                <sections:NowCastInput ViewModel="{x:Bind ViewModel, Mode=OneWay}"/>
+            </ctl:ControlCard.CardBody>
+        </ctl:ControlCard>
+
+        <!-- Fore: SPC outlook selectors (was ContextBar's inline OutlookInput). -->
+        <ctl:ControlCard Title="SPC Outlooks"
+                         CloseRequested="OnCardCloseRequested"
+                         Visibility="{x:Bind VisibleWhen(ViewModel.IsForeCardOpen), Mode=OneWay}">
+            <ctl:ControlCard.CardBody>
+                <sections:OutlookInput ViewModel="{x:Bind ViewModel.Outlook, Mode=OneWay}"/>
+            </ctl:ControlCard.CardBody>
+        </ctl:ControlCard>
+    </Grid>
+</UserControl>

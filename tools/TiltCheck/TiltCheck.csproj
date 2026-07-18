@@ -17,8 +17,8 @@
        never drift from it. Same namespace + compiled into this assembly => Level2Format's `internal`
        members are visible here without an InternalsVisibleTo in the app. -->
   <ItemGroup>
-    <Compile Include="..\..\OfflineMapsTest\Services\Level2Format.cs" Link="Level2Format.cs" />
-    <Compile Include="..\..\OfflineMapsTest\Services\RadarDiagnostics.cs" Link="RadarDiagnostics.cs" />
+    <Compile Include="..\..\Anvil.App\Services\Level2Format.cs" Link="Level2Format.cs" />
+    <Compile Include="..\..\Anvil.App\Services\RadarDiagnostics.cs" Link="RadarDiagnostics.cs" />
   </ItemGroup>
 
 </Project>
