@@ -1,6 +1,6 @@
 # Anvil
 
-Severe-weather workstation for Windows.Decodes NEXRAD Level II from raw base data, live or
+**Severe-weather workstation for Windows** .Decodes NEXRAD Level II from raw base data, live or
 replayed from the archive back to 2008, and GPU-renders it over local, fully style-controlled vector
 basemaps, with SPC outlooks, watches, and DOW mobile-radar frames.
 
