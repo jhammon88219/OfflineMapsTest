@@ -1,12 +1,22 @@
 # Anvil
 
-**Severe-weather workstation for Windows** .Decodes NEXRAD Level II from raw base data, live or
+**Severe-weather workstation for Windows.** Decodes NEXRAD Level II from raw base data, live or
 replayed from the archive back to 2008, and GPU-renders it over local, fully style-controlled vector
 basemaps, with SPC outlooks, watches, and DOW mobile-radar frames.
 
 Anvil reads raw WSR-88D Level II volumes, decodes the Message 31 base data itself, and renders every
 gate on the GPU. No server-side rendering, no image tiles. The basemap is a local PMTiles archive
 instead of a tile service, so you control the styling and panning costs nothing.
+
+## Status
+
+Active development, and likely to stay that way for a year or more. There are no tagged releases and
+no stability guarantees. The UI is mid-rebuild: several capabilities exist in the view models ahead of
+the controls that expose them, so what the app can do is currently ahead of what you can reach on
+screen.
+
+**Not for operational use.** This is a personal project for exploring radar data. Use official NWS
+products and your local warnings for any safety-of-life decision.
 
 ## What it does
 
@@ -232,29 +242,11 @@ the `nexrad-level-2-data` decoder, seek-bzip, and SharpCompress.
 Anvil is an independent project. It is not affiliated with, endorsed by, or supported by NOAA, the
 National Weather Service, Unidata, or NSF NCAR.
 
-
-
-
-
-
-
-
-
 ## About this project
 
 Anvil is self-taught work. I have no formal background in meteorology, radar engineering, or
 software development, so expect some non-standard choices. Corrections are welcome, particularly on
 the meteorology and the Level II decoding.
-
-## Status
-
-Active development, and likely to stay that way for a year or more. There are no tagged releases and
-no stability guarantees. The UI is mid-rebuild: several capabilities exist in the view models ahead of
-the controls that expose them, so what the app can do is currently ahead of what you can reach on
-screen.
-
-**Not for operational use.** This is a personal project for exploring radar data. Use official NWS
-products and your local warnings for any safety-of-life decision.
 
 ## License
 
