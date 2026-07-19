@@ -15,7 +15,8 @@
 
     <!-- One fixed footprint for EVERY temporal card (deliberately larger than any current body needs —
          less-busy cards just carry empty space for now). Editing a card body won't change the card size. -->
-    <Border Width="460" Height="260"
+    <Border Width="460"
+            Height="260"
             Background="{ThemeResource OverlayBarSurfaceBrush}"
             BorderBrush="{ThemeResource CardStrokeColorDefaultSolidBrush}"
             BorderThickness="1"
