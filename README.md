@@ -8,6 +8,8 @@ Anvil reads raw WSR-88D Level II volumes, decodes the Message 31 base data itsel
 gate on the GPU. No server-side rendering, no image tiles. The basemap is a local PMTiles archive
 instead of a tile service, so you control the styling and panning costs nothing.
 
+<img width="3840" height="2088" alt="KTLX reflectivity from the May 24 2011 Oklahoma outbreak, replayed from the archive with the Past Event Viewer" src="https://github.com/user-attachments/assets/d91cf04c-e649-4f9b-80c2-3ffc1f314334" />
+
 ## Status
 
 Active development, and likely to stay that way for a year or more. There are no tagged releases and
