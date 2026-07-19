@@ -106,6 +106,133 @@ To keep it somewhere else, edit `ResolveDefaultFolder` in `Anvil.App/Services/Se
 use a different filename, change `MapDataFileName` in the same file and the `url` field in each
 `style*.json` under `Anvil.App/Assets/Map/`.
 
+## Build and run
+
+```sh
+git clone https://github.com/jhammon88219/Anvil.git
+cd Anvil
+dotnet build Anvil.App/Anvil.App.csproj -c Debug -p:Platform=x64 -p:RuntimeIdentifier=win-x64
+```
+
+The platform must be explicit. Plain AnyCPU fails during MSIX packaging.
+
+To run Anvil, open `Anvil.slnx` in Visual Studio and press F5, which deploys the package. Running the
+built `.exe` directly throws. It has no package identity that way, and the app keeps its caches in
+package-local storage.
+
+`Anvil.Core`, `Anvil.Tests` and `tools/TiltCheck` target plain `net8.0` and take no platform
+arguments, so a change confined to Core can be checked without paying for MSIX packaging:
+
+```sh
+dotnet build Anvil.Core/Anvil.Core.csproj
+```
+
+The solution also builds as a whole with `dotnet build Anvil.slnx -c Debug -p:Platform=x64`. x86 and
+ARM64 configurations exist, but x64 is what the build recipes use.
+
+If the map is black on first launch, the basemap archive is missing or misnamed. See
+[Basemap data](#basemap-data).
+
+## How it's put together
+
+Four projects. The boundary between them is enforced by the target framework rather than by
+convention:
+
+| Project | Target | Contents |
+|---|---|---|
+| `Anvil.Core` | `net8.0` | Models, services, view models. No Windows dependency. |
+| `Anvil.App` | `net8.0-windows` | WinUI 3 shell, XAML, the web layer, three platform-bound services |
+| `Anvil.Tests` | `net8.0` | xunit suite over the decoder |
+| `tools/TiltCheck` | `net8.0` | Runs tilt extraction against a real volume from the archive |
+
+`Anvil.Core` stays free of Windows APIs deliberately. Its only runtime dependency is SharpCompress.
+That keeps the console tools able to reference it directly, and keeps the test suite running in about
+a second without deploying anything. Three implementations genuinely need WinRT, and all three live in
+`Anvil.App` behind interfaces declared in Core: geolocation, settings storage, and UI thread dispatch.
+
+Both projects use `Anvil` as their root namespace rather than `Anvil.Core` and `Anvil.App`, so moving
+a file between them is a move and nothing else.
+
+### The C# and JavaScript split
+
+The map is [MapLibre GL JS](https://maplibre.org/) in a single WebView2, because WebGL rendering
+cannot happen in C#. That web layer is the only non-C# surface in the project and it is kept narrow:
+an orchestrator plus one module per overlay, with radar decoding split into a worker. Everything that
+can be C# is C#.
+
+Traffic across the boundary runs through two seams:
+
+- **C# to JavaScript.** `MapService` builds command strings and dispatches them through `IMapView`.
+  `MainWindow` is the only class that touches WebView2 at all.
+- **JavaScript to C#.** `WebMessageRouter` receives posted messages and routes them to the view
+  models.
+
+Services never know WebView2 exists. Details in
+[`Anvil.App/Assets/Map/README.md`](Anvil.App/Assets/Map/README.md).
+
+### MVVM
+
+Hand-wired in the `MainWindow` constructor. No DI container. `MapViewModel` owns basemap style and
+region, and builds the subsystem view models beneath it: radar, outlooks, watches, markers, and the
+site explorer. The radar view model is the large one and is split into partial files by facet.
+
+## Tests
+
+```sh
+dotnet test Anvil.Tests/Anvil.Tests.csproj
+```
+
+About a second, with no deployment. Level II volumes are synthesized in memory: a file header, bzip2
+LDM records, and hand-built Message 31 radial headers. The suite needs no multi-gigabyte fixture and
+no network.
+
+Coverage centers on the decoder, where mistakes are quiet and expensive: cut-angle matching, Doppler
+companion attachment, completion semantics, and the byte scanners underneath them. It is a starting
+point rather than broad coverage.
+
+Regression tests are validated by mutation. After writing one, the code it guards is temporarily
+broken to confirm the test actually goes red. The median-angle test was checked that way: reverting
+the cut-angle rule to the original bug turned that one test red and left every other test green. A
+regression test never observed failing is not evidence of anything.
+
+`tools/TiltCheck` covers what unit tests cannot. It runs the same extraction against a real volume
+pulled from the archive and reports what each designed tilt actually yielded:
+
+```sh
+cd tools/TiltCheck
+dotnet run -- KTLX 2025/07/15 18
+```
+
+## Documentation
+
+`docs/` holds one file per area: radar tilts, velocity dealiasing, the live frame path, product
+history, decode validation, the past event and DOW viewers, radar site lists, and a running notes
+file. Each is the deep reference for the code it describes rather than a summary of it.
+
+`CLAUDE.md` at the repo root is the working map of the codebase: where things live, how to build, and
+the gotchas worth knowing before changing anything.
+
+## Data sources
+
+| Data | Source |
+|---|---|
+| NEXRAD Level II | Unidata's archive and chunks buckets on AWS |
+| Convective outlooks | [NOAA/NWS Storm Prediction Center](https://www.spc.noaa.gov/) |
+| Fire weather outlooks | NWS map services |
+| Watches | NWS watch/warning/advisory map service |
+| Basemap | [Protomaps](https://github.com/protomaps/basemaps), © [OpenStreetMap](https://openstreetmap.org) contributors |
+
+The bundled DOW sample (`dow8_2021-10-11.dow.json`) comes from NSF NCAR EOL by way of the
+open-radar-data archive. Any `.dow.json` you add redistributes research data, so use openly licensed
+archives and carry the citation.
+
+Built with [MapLibre GL JS](https://maplibre.org/), [PMTiles](https://github.com/protomaps/PMTiles),
+the `nexrad-level-2-data` decoder, seek-bzip, and SharpCompress.
+
+Anvil is an independent project. It is not affiliated with, endorsed by, or supported by NOAA, the
+National Weather Service, Unidata, or NSF NCAR.
+
+
 
 
 
@@ -128,3 +255,7 @@ screen.
 
 **Not for operational use.** This is a personal project for exploring radar data. Use official NWS
 products and your local warnings for any safety-of-life decision.
+
+## License
+
+[AGPL-3.0](LICENSE.txt). Derivative work must be released under the same license.
