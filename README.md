@@ -9,6 +9,7 @@ gate on the GPU. No server-side rendering, no image tiles. The basemap is a loca
 instead of a tile service, so you control the styling and panning costs nothing.
 
 <img width="3840" height="2088" alt="Screenshot 2026-07-19 142833" src="https://github.com/user-attachments/assets/d91cf04c-e649-4f9b-80c2-3ffc1f314334" />
+![KTLX reflectivity from the May 24 2011 Oklahoma outbreak, replayed from the archive with the Past Event Viewer](docs/images/ktlx-2011-05-24.png)
 
 ## What it does
 
