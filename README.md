@@ -44,3 +44,23 @@ instead of a tile service, so you control the styling and panning costs nothing.
 Five styles ship with the app: Regular, Dark, Data Viz Light, Data Viz Black, and Data Viz Grayscale.
 All read from one local PMTiles archive. Because the tiles and the style JSON are both local, a
 cartography change is a file edit rather than a service request.
+
+
+
+
+
+## About this project
+
+Anvil is self-taught work. I have no formal background in meteorology, radar engineering, or
+software development, so expect some non-standard choices. Corrections are welcome, particularly on
+the meteorology and the Level II decoding.
+
+## Status
+
+Active development, and likely to stay that way for a year or more. There are no tagged releases and
+no stability guarantees. The UI is mid-rebuild: several capabilities exist in the view models ahead of
+the controls that expose them, so what the app can do is currently ahead of what you can reach on
+screen.
+
+**Not for operational use.** This is a personal project for exploring radar data. Use official NWS
+products and your local warnings for any safety-of-life decision.
