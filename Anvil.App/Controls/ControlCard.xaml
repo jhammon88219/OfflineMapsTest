@@ -13,10 +13,10 @@
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d">
 
-    <!-- One fixed footprint for EVERY temporal card (deliberately larger than any current body needs —
-         less-busy cards just carry empty space for now). Editing a card body won't change the card size. -->
+    <!-- Fixed width for EVERY temporal card; height defaults to 260 but a busier card (e.g. Past Event +
+         its historical outlook controls) can grow via CardHeight. Editing a card body won't change the size. -->
     <Border Width="460"
-            Height="260"
+            Height="{x:Bind CardHeight, Mode=OneWay}"
             Background="{ThemeResource OverlayBarSurfaceBrush}"
             BorderBrush="{ThemeResource CardStrokeColorDefaultSolidBrush}"
             BorderThickness="1"

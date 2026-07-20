@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -55,5 +56,16 @@ namespace Anvil.Services
 		/// no cached copy. The last-known-good text is returned on a network failure.
 		/// </summary>
 		Task<string?> GetNarrativeAsync(SpcOutlookProduct product, CancellationToken cancellationToken = default);
+
+		/// <summary>
+		/// Fetches a HISTORICAL SPC outlook issuance for the PastCast window (day 1-3, a calendar
+		/// <paramref name="date"/>, and a UTC issuance <paramref name="cycle"/>) from the IEM archive,
+		/// transforms each product into the renderer's color schema, and caches one GeoJSON file per
+		/// product under <see cref="CacheDirectory"/> (served from the same <c>spcoutlooks</c> host as the
+		/// live outlooks). Historical data is immutable, so results are cached and never refreshed. Returns
+		/// which products the issuance carried; a valid-but-empty issuance reports <c>Found = false</c>.
+		/// Use <see cref="SpcOutlookService.PastLocalUrl"/> to build the local URL for a cached product.
+		/// </summary>
+		Task<PastOutlookResult> EnsurePastOutlookAsync(DateOnly date, int day, int cycle, CancellationToken cancellationToken = default);
 	}
 }

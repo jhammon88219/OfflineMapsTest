@@ -35,6 +35,17 @@ namespace Anvil.Controls
 		public static readonly DependencyProperty CardBodyProperty =
 			DependencyProperty.Register(nameof(CardBody), typeof(object), typeof(ControlCard), new PropertyMetadata(null));
 
+		/// <summary>Card height. Defaults to the shared 260; a busier card (e.g. Past Event, which stacks
+		/// the replay controls + the historical-outlook controls) sets a taller value to grow vertically.</summary>
+		public double CardHeight
+		{
+			get => (double)GetValue(CardHeightProperty);
+			set => SetValue(CardHeightProperty, value);
+		}
+
+		public static readonly DependencyProperty CardHeightProperty =
+			DependencyProperty.Register(nameof(CardHeight), typeof(double), typeof(ControlCard), new PropertyMetadata(260.0));
+
 		/// <summary>Raised when the user clicks the down-triangle to hide the card.</summary>
 		public event RoutedEventHandler? CloseRequested;
 

@@ -120,6 +120,109 @@ namespace Anvil.Services
 				? dt
 				: null;
 
+		// ── Historical outlooks for PastCast (IEM archive; see SpcOutlookColors + PastOutlookViewModel) ──
+		// SPC's own site serves only the latest outlook, so historical issuances come from the Iowa
+		// Environmental Mesonet API (parses SPC's PTS product; polygons back to ~2002). One convective (C)
+		// call returns every category for the issuance; a fire (F) call returns fire. IEM ships no colors,
+		// so SpcOutlookColors transforms each into the renderer's fill/stroke/LABEL schema and we cache one
+		// file per product. Historical data is immutable → fetch-once, cache-forever (no refresh loop).
+		private const string IemOutlookBase = "https://mesonet.agron.iastate.edu/api/1/nws/spc_outlook.geojson";
+
+		// The product types we attempt to extract from a convective issuance (empties are skipped, so
+		// attempting all four on a Day-3 issuance that only has Categorical is harmless).
+		private static readonly SpcOutlookType[] ConvectiveTypes =
+		{
+			SpcOutlookType.Categorical, SpcOutlookType.Tornado, SpcOutlookType.Wind, SpcOutlookType.Hail,
+			SpcOutlookType.ProbabilisticCombined, // Day 2-3 "ANY SEVERE" (empty on Day 1, skipped)
+		};
+
+		/// <summary>Stable cache filename for one historical outlook product (also the basis of its
+		/// local URL). Deterministic so the VM can point <see cref="SpcOutlookProduct.LocalUrl"/> at a
+		/// file this method wrote.</summary>
+		public static string PastCacheName(DateOnly date, int day, int cycle, SpcOutlookType type) =>
+			$"past-{date:yyyyMMdd}-d{day}-c{cycle:D2}-{TypeSlug(type)}.geojson";
+
+		/// <summary>The <c>spcoutlooks</c>-host URL a cached historical product is served from.</summary>
+		public string PastLocalUrl(DateOnly date, int day, int cycle, SpcOutlookType type) =>
+			$"https://{CacheHostName}/{PastCacheName(date, day, cycle, type)}";
+
+		public async Task<PastOutlookResult> EnsurePastOutlookAsync(DateOnly date, int day, int cycle,
+			CancellationToken cancellationToken = default)
+		{
+			var available = new List<SpcOutlookType>();
+			SpcOutlookTimes? times = null;
+
+			try
+			{
+				// Convective: one call yields every category; split + color each into its own cache file.
+				var convective = await FetchIemAsync(day, date, cycle, "C", cancellationToken);
+				if (convective is not null)
+				{
+					using var doc = JsonDocument.Parse(convective);
+					foreach (var type in ConvectiveTypes)
+					{
+						if (SpcOutlookColors.TryBuildProduct(doc.RootElement, type, out var gj, out var t))
+						{
+							await WriteCacheAsync(PastCacheName(date, day, cycle, type), gj, cancellationToken);
+							available.Add(type);
+							times ??= t;
+						}
+					}
+				}
+
+				// Fire is a separate outlook_type.
+				var fire = await FetchIemAsync(day, date, cycle, "F", cancellationToken);
+				if (fire is not null)
+				{
+					using var doc = JsonDocument.Parse(fire);
+					if (SpcOutlookColors.TryBuildProduct(doc.RootElement, SpcOutlookType.FireWeather, out var gj, out var t))
+					{
+						await WriteCacheAsync(PastCacheName(date, day, cycle, SpcOutlookType.FireWeather), gj, cancellationToken);
+						available.Add(SpcOutlookType.FireWeather);
+						times ??= t;
+					}
+				}
+			}
+			catch (OperationCanceledException)
+			{
+				throw;
+			}
+			catch (Exception ex)
+			{
+				return new PastOutlookResult(false, cycle, Array.Empty<SpcOutlookType>(), null, ex.Message);
+			}
+
+			return new PastOutlookResult(available.Count > 0, cycle, available, times, null);
+		}
+
+		// Fetches one IEM outlook GeoJSON, or null on a non-success/empty response (so the caller can try
+		// another cycle). Empty-but-valid collections parse fine and simply yield no products above.
+		private async Task<string?> FetchIemAsync(int day, DateOnly date, int cycle, string outlookType, CancellationToken ct)
+		{
+			var url = $"{IemOutlookBase}?day={day}&valid={date:yyyy-MM-dd}&cycle={cycle}&outlook_type={outlookType}";
+			using var response = await _http.GetAsync(url, ct);
+			return response.IsSuccessStatusCode ? await response.Content.ReadAsStringAsync(ct) : null;
+		}
+
+		// Atomic write into the shared cache dir (temp + move), so a failed write never corrupts a cache file.
+		private async Task WriteCacheAsync(string fileName, string content, CancellationToken ct)
+		{
+			var path = Path.Combine(CacheDirectory, fileName);
+			var temp = path + ".tmp";
+			await File.WriteAllTextAsync(temp, content, ct);
+			File.Move(temp, path, overwrite: true);
+		}
+
+		private static string TypeSlug(SpcOutlookType type) => type switch
+		{
+			SpcOutlookType.Categorical => "cat",
+			SpcOutlookType.Tornado => "torn",
+			SpcOutlookType.Wind => "wind",
+			SpcOutlookType.Hail => "hail",
+			SpcOutlookType.ProbabilisticCombined => "prob",
+			_ => "fire",
+		};
+
 		public async Task<IReadOnlyList<SpcOutlookFetchResult>> RefreshAllAsync(CancellationToken cancellationToken = default)
 		{
 			// Sequential keeps it gentle on NOAA and easy to reason about. A future

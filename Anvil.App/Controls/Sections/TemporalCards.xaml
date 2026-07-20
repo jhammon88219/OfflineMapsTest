@@ -17,12 +17,25 @@
     mc:Ignorable="d">
 
     <Grid>
-        <!-- Past Event: date / start / window form (was ContextBar's inline PastEventInput). -->
+        <!-- Past Event: date / start / window form + the historical SPC outlook controls for that date,
+             stacked. The card is taller (CardHeight) to hold both — the outlook is an independent overlay
+             on the replay radar, mirroring live mode. -->
         <ctl:ControlCard Title="Past Event"
+                         CardHeight="470"
                          CloseRequested="OnCardCloseRequested"
                          Visibility="{x:Bind VisibleWhen(ViewModel.IsPastCardOpen), Mode=OneWay}">
             <ctl:ControlCard.CardBody>
-                <sections:PastEventInput ViewModel="{x:Bind ViewModel.Radar, Mode=OneWay}"/>
+                <Grid RowSpacing="12">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/> <!-- radar: date / start / window -->
+                        <RowDefinition Height="Auto"/> <!-- divider -->
+                        <RowDefinition Height="Auto"/> <!-- historical SPC outlook -->
+                    </Grid.RowDefinitions>
+                    <sections:PastEventInput Grid.Row="0" ViewModel="{x:Bind ViewModel.Radar, Mode=OneWay}"/>
+                    <Border Grid.Row="1" Height="1" Margin="0,2"
+                            Background="{ThemeResource CardStrokeColorDefaultSolidBrush}"/>
+                    <sections:PastOutlookInput Grid.Row="2" ViewModel="{x:Bind ViewModel.PastOutlook, Mode=OneWay}"/>
+                </Grid>
             </ctl:ControlCard.CardBody>
         </ctl:ControlCard>
 

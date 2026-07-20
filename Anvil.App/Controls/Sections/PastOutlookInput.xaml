@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- PastOutlookInput — the HISTORICAL SPC outlook controls for the PastCast card (Day / Product / issuance
+     Cycle / Opacity + a status line and issued/valid readout). Sits below PastEventInput in the (grown)
+     Past Event card. Same grid layout as OutlookInput. Selecting a product fetches the archived issuance
+     for the entered replay date and overlays it on the past radar. Bound to PastOutlookViewModel. -->
+<UserControl x:Class="Anvil.Controls.Sections.PastOutlookInput"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             mc:Ignorable="d">
+
+    <UserControl.Resources>
+        <Style x:Key="PastOutlookLabelStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Foreground" Value="{ThemeResource TextFillColorTertiaryBrush}"/>
+        </Style>
+    </UserControl.Resources>
+
+    <Grid ColumnSpacing="12" RowSpacing="10" VerticalAlignment="Top">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="Auto"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/> <!-- Day + Cycle -->
+            <RowDefinition Height="Auto"/> <!-- Product -->
+            <RowDefinition Height="Auto"/> <!-- Opacity -->
+            <RowDefinition Height="Auto"/> <!-- status -->
+            <RowDefinition Height="Auto"/> <!-- issued/valid times -->
+        </Grid.RowDefinitions>
+
+        <!-- Day + issuance Cycle, side by side. -->
+        <TextBlock Grid.Row="0" Grid.Column="0" Text="Outlook" Style="{StaticResource PastOutlookLabelStyle}"/>
+        <Grid Grid.Row="0" Grid.Column="1" ColumnSpacing="8" HorizontalAlignment="Left">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <ComboBox Grid.Column="0" Width="90"
+                      ItemsSource="{x:Bind ViewModel.Days}"
+                      DisplayMemberPath="Label"
+                      SelectedItem="{x:Bind ViewModel.SelectedDayOption, Mode=TwoWay}"
+                      ToolTipService.ToolTip="Outlook day (1-3) for the replay date"/>
+            <TextBlock Grid.Column="1" Text="cycle" Style="{StaticResource PastOutlookLabelStyle}"/>
+            <ComboBox Grid.Column="2" Width="86"
+                      ItemsSource="{x:Bind ViewModel.CycleOptions, Mode=OneWay}"
+                      DisplayMemberPath="Label"
+                      SelectedItem="{x:Bind ViewModel.SelectedCycleOption, Mode=TwoWay}"
+                      ToolTipService.ToolTip="SPC issuance cycle (UTC); Auto picks the one in effect at the replay time"/>
+        </Grid>
+
+        <!-- Product (None + the day's products). -->
+        <TextBlock Grid.Row="1" Grid.Column="0" Text="Product" Style="{StaticResource PastOutlookLabelStyle}"/>
+        <ComboBox Grid.Row="1" Grid.Column="1"
+                  Width="184" HorizontalAlignment="Left"
+                  ItemsSource="{x:Bind ViewModel.ProductOptions, Mode=OneWay}"
+                  DisplayMemberPath="Label"
+                  SelectedItem="{x:Bind ViewModel.SelectedProductOption, Mode=TwoWay}"
+                  ToolTipService.ToolTip="Historical outlook product (None clears the overlay)"/>
+
+        <!-- Opacity: fill opacity (outlines stay solid). -->
+        <TextBlock Grid.Row="2" Grid.Column="0" Text="Opacity" Style="{StaticResource PastOutlookLabelStyle}"/>
+        <Slider Grid.Row="2" Grid.Column="1"
+                Width="184" HorizontalAlignment="Left"
+                Minimum="0" Maximum="1"
+                StepFrequency="0.05" SmallChange="0.05"
+                IsThumbToolTipEnabled="False"
+                VerticalAlignment="Center"
+                Value="{x:Bind ViewModel.Opacity, Mode=TwoWay}"
+                ToolTipService.ToolTip="Outlook fill opacity (outlines stay solid)"/>
+
+        <!-- Status line (loading / not-found / loaded). -->
+        <TextBlock Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="2"
+                   Text="{x:Bind ViewModel.StatusText, Mode=OneWay}"
+                   TextWrapping="Wrap" FontSize="12"
+                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+
+        <!-- Issued / valid times, when available. -->
+        <TextBlock Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="2"
+                   Text="{x:Bind ViewModel.TimesText, Mode=OneWay}"
+                   Visibility="{x:Bind VisibleWhen(ViewModel.HasTimes), Mode=OneWay}"
+                   TextWrapping="Wrap" FontSize="11"
+                   Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+    </Grid>
+</UserControl>

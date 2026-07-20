@@ -47,6 +47,7 @@ namespace Anvil.ViewModels
 			// the transport-bar section controls bind slices of them.
 			Radar = new RadarViewModel(mapService, radarSiteProvider, radarService, dowEventProvider);
 			Outlook = new OutlookViewModel(mapService, spcOutlookService, dispatcher);
+			PastOutlook = new PastOutlookViewModel(mapService, spcOutlookService, Radar);
 			Watches = new WatchesViewModel(mapService, watchService, dispatcher);
 			Markers = new MarkersViewModel(mapService, locationService);
 			SiteExplorer = new RadarSiteExplorerViewModel(Radar, Markers, radarService, mapService);
@@ -62,6 +63,11 @@ namespace Anvil.ViewModels
 					OnPropertyChanged(nameof(IsPastCast));
 					// Entering replay takes the radar layer — disarm the (mutually exclusive) live toggle.
 					if (Radar.IsPastEventMode && _isNowCast) { _isNowCast = false; OnPropertyChanged(nameof(IsNowCast)); }
+					// The map has ONE outlook layer: hand it to the historical (PastOutlook) overlay in past
+					// mode and back to the live outlook otherwise. Entering clears the live outlook (showing
+					// today's forecast over historical radar would be wrong); PastOutlook then drives it.
+					if (Radar.IsPastEventMode && Outlook.IsOutlookVisible) { Outlook.IsOutlookVisible = false; }
+					PastOutlook.OnPastModeChanged(Radar.IsPastEventMode);
 					CloseCardIfInactive();
 				}
 				else if (e.PropertyName == nameof(RadarViewModel.HasRadarLoop))
@@ -105,6 +111,11 @@ namespace Anvil.ViewModels
 		/// <summary>The SPC outlook subsystem view model (day/product selection, info card,
 		/// next-update progress, background refresh).</summary>
 		public OutlookViewModel Outlook { get; }
+
+		/// <summary>The historical SPC outlook overlay for PastCast (day 1-3 product for the replay date,
+		/// from the IEM archive). Shares the map's single outlook layer with <see cref="Outlook"/>; this VM
+		/// owns it in past mode (see the IsPastEventMode handler above).</summary>
+		public PastOutlookViewModel PastOutlook { get; }
 
 		/// <summary>The SPC watch-box subsystem view model (Tornado / Severe Thunderstorm Watches —
 		/// current-conditions alerts surfaced under NowCast, with their own toggle + refresh loop).</summary>
@@ -346,6 +357,7 @@ namespace Anvil.ViewModels
 			await Outlook.OnMapsReadyAsync();
 			await Watches.OnMapsReadyAsync();
 			await Radar.OnMapsReadyAsync();
+			await PastOutlook.OnMapsReadyAsync();
 		}
 
 		public event PropertyChangedEventHandler? PropertyChanged;
