@@ -3,6 +3,23 @@
 // back so the bzip2 decode never freezes the UI. Classic worker using dynamic import().
 self.onmessage = function (e) {
     const d = e.data;
+    // Grids-only inspector build (radar.js decodeGridForFrame): decode just ONE product's value grid and
+    // transfer it back for the host to merge into the existing frame — no full re-decode. See decodeGridOnly.
+    if (d.gridOnly) {
+        import('./radar-decode.js').then(function (m) {
+            return m.decodeGridOnly(d.ab, d.siteLat, d.siteLon, d.minDbz, d.product);
+        }).then(function (res) {
+            const msg = { token: d.token, index: d.index, url: d.url, gridsOnly: true, gridProduct: d.product, grids: {} };
+            const transfer = [];
+            const gr = res.grids[d.product];
+            if (gr && gr.az && gr.values) { msg.grids[d.product] = gr; transfer.push(gr.az.buffer, gr.values.buffer); }
+            else { msg.grids[d.product] = null; }
+            self.postMessage(msg, transfer);
+        }).catch(function (err) {
+            self.postMessage({ token: d.token, index: d.index, url: d.url, gridsOnly: true, error: String(err && err.message ? err.message : err) });
+        });
+        return;
+    }
     import('./radar-decode.js').then(function (m) {
         return m.decodeAndBuild(d.ab, d.siteLat, d.siteLon, d.minDbz, d.buildLazy, d.buildGrids);
     }).then(function (res) {

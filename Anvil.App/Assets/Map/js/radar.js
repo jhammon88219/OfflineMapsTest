@@ -91,19 +91,26 @@
     var pumpingUpgrades = false;  // re-entrancy guard (a cache-hit upgrade completes synchronously)
     var UPGRADE_CONCURRENCY = 3;  // leave a worker free of the pool (size 4) for the current frame / loads
     function resetUpgrades() { upgradeQueue = []; upgradeInFlight = {}; upgradeInFlightN = 0; }
+    // A lazy product (velocity) needs (re)building when it's the ACTIVE product OR being prefetched and this
+    // frame lacks it. built[id] tracks whether the build RAN, so a frame with genuinely no velocity
+    // (built.velocity=true, geometry null) won't re-decode forever. This decides full-decode vs grids-only.
+    function needsLazyGeom(f) {
+        if (!Products) return false;
+        for (var id in Products) {
+            if (Products[id].lazy && (product === id || velPrefetch) && !(f.built && f.built[id])) return true;
+        }
+        return false;
+    }
+    // Whether the ACTIVE product's inspector value grid has been BUILT for a frame — either by a full decode
+    // (frame-level gridsBuilt, which built every product's grid) or the grids-only fast path (gridsExtra[id],
+    // recorded per product). "Built" ≠ "has data": a product with no data yields a null grid, but it's still
+    // marked, so a no-data frame isn't re-queued forever (what the old frame-level gridsBuilt guaranteed).
+    function activeGridReady(f) { return !!(f && (f.gridsBuilt || (f.gridsExtra && f.gridsExtra[product]))); }
     function needsUpgrade(idx) {
         var f = frames[idx];
         if (!f || !f.url) return false;
-        if (inspecting && !f.gridsBuilt) return true;             // no value grids, Inspect on
-        // A lazy product (velocity) needs (re)building when it's the ACTIVE product OR being prefetched
-        // and this frame lacks it. built[id] tracks whether the build RAN, so a frame with genuinely no
-        // velocity (built.velocity=true, geometry null) won't re-decode forever.
-        if (Products) {
-            for (var id in Products) {
-                if (Products[id].lazy && (product === id || velPrefetch) && !(f.built && f.built[id])) return true;
-            }
-        }
-        return false;
+        if (inspecting && !activeGridReady(f)) return true;       // active product's value grid not built yet, Inspect on
+        return needsLazyGeom(f);
     }
     function upgradePriority(idx) {
         if (currentFrame < 0) return idx;
@@ -269,7 +276,7 @@
                 workerPool = [];
                 for (let i = 0; i < DECODE_POOL_SIZE; i++) {
                     const w = new Worker(new URL('radar-worker.js', SELF_SCRIPT).href);
-                    w.onmessage = function (e) { applyFrameResult(e.data); };
+                    w.onmessage = function (e) { const m = e.data; if (m && m.gridsOnly) applyGridResult(m); else applyFrameResult(m); };
                     w.onerror = function (e) { hostLog('worker error: ' + (e && e.message ? e.message : e)); };
                     workerPool.push(w);
                 }
@@ -614,13 +621,23 @@
         // reflectivity/CC with prefetch off we skip it and re-decode on demand (setProduct).
         const wantLazy = productLazy(product) || velPrefetch; // build lazy products (velocity) when active OR prefetching
         const wantGrids = inspecting; // inspector value grids are only needed while Inspect is on
+        // Grids-only fast path (turning Inspect on): the frame already has the active product's GEOMETRY
+        // (and nothing lazy is pending for it) and only its inspector VALUE GRID is missing — so build just
+        // that one grid and merge it, instead of a full re-decode of every product's geometry + a redundant
+        // velocity dealias. This is what makes Inspect show values fast; the loop's other frames fill in the
+        // same way through the upgrade queue. Only for the current loaded frames (not the initial decode).
+        var f0 = frames[index];
+        if (wantGrids && f0 && f0.built && f0.built[product] && !activeGridReady(f0) && !needsLazyGeom(f0)) {
+            decodeGridForFrame(url, index, product);
+            return;
+        }
         // Cache hit → reuse the decoded geometry synchronously (no fetch, no worker). This is what
         // makes a site revisit / replay toggle instant. Reject a hit that lacks a piece we need now —
-        // the lazy product's geometry (a refl-only decode from a prior view) or the inspector grids
-        // (decoded with Inspect off) — so we fall through and build it this time. Clone with THIS load's
-        // token+index; arrays shared.
+        // the lazy product's geometry (a refl-only decode from a prior view) or the ACTIVE product's
+        // inspector grid (decoded with Inspect off) — so we fall through and build it this time. Clone
+        // with THIS load's token+index; arrays shared.
         const hit = cacheGet(url);
-        if (hit && (!wantLazy || lazyBuiltIn(hit)) && (!wantGrids || hit.gridsBuilt)) {
+        if (hit && (!wantLazy || lazyBuiltIn(hit)) && (!wantGrids || hit.gridsBuilt || (hit.gridsExtra && hit.gridsExtra[product]))) {
             hostLog('frame ' + index + ' cache hit');
             applyFrameResult(Object.assign({}, hit, { token: myToken, index: index, cached: true }));
             return;
@@ -647,6 +664,57 @@
             hostLog('frame ' + index + ' fetch failed: ' + (err && err.message ? err.message : err));
             post({ type: 'radarFrameReady', index: index, hasData: false });
         });
+    }
+
+    // Builds ONLY the active product's inspector value grid for a frame and merges it in (geometry left
+    // alone) — the fast path behind turning Inspect on. Off-thread with a main-thread fallback, same as
+    // decodeFrame. Runs under the upgrade queue's slot accounting (upgradeDone frees the slot).
+    function decodeGridForFrame(url, index, prod) {
+        const myToken = loopToken;
+        fetch(url, { cache: 'no-store' }).then(function (r) {
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return r.arrayBuffer();
+        }).then(function (ab) {
+            if (myToken !== loopToken) { upgradeDone(index); return; }
+            const w = getWorker();
+            if (w) {
+                w.postMessage({ gridOnly: true, ab: ab, siteLat: siteLat, siteLon: siteLon, minDbz: MIN_DBZ, token: myToken, index: index, url: url, product: prod }, [ab]);
+            } else {
+                import('./radar-decode.js').then(function (m) {
+                    return m.decodeGridOnly(ab, siteLat, siteLon, MIN_DBZ, prod);
+                }).then(function (r2) {
+                    applyGridResult({ token: myToken, index: index, url: url, gridsOnly: true, gridProduct: prod, grids: r2.grids });
+                }).catch(function (err) {
+                    applyGridResult({ token: myToken, index: index, url: url, gridsOnly: true, error: String(err && err.message ? err.message : err) });
+                });
+            }
+        }).catch(function (err) {
+            upgradeDone(index);
+            hostLog('grid-only ' + index + ' fetch failed: ' + (err && err.message ? err.message : err));
+        });
+    }
+
+    // Merges a grids-only decode into the existing frame (and its decoded-cache entry), leaving the
+    // geometry untouched. The inspector reads the new grid on the next mousemove, so no re-render is needed.
+    function applyGridResult(res) {
+        if (res.token !== loopToken) { upgradeDone(res.index); return; } // stale loop
+        if (res.error) {
+            hostLog('grid-only ' + res.index + ' error: ' + res.error);
+            upgradeDone(res.index);
+            return;
+        }
+        var g = (res.grids && (res.gridProduct in res.grids)) ? res.grids[res.gridProduct] : null;
+        var f = frames[res.index];
+        if (f) {
+            f.grids = f.grids || {}; f.grids[res.gridProduct] = g || null;
+            f.gridsExtra = f.gridsExtra || {}; f.gridsExtra[res.gridProduct] = true; // built (even if no data) → don't re-queue
+        }
+        var c = decodedCache.get(res.url); // mirror into the cache so a revisit keeps the grid
+        if (c) {
+            c.grids = c.grids || {}; c.grids[res.gridProduct] = g || null;
+            c.gridsExtra = c.gridsExtra || {}; c.gridsExtra[res.gridProduct] = true;
+        }
+        upgradeDone(res.index); // free the slot + pump the next queued frame
     }
 
     // ---- Inspector (RadarScope-style "read the value under the cursor") ----

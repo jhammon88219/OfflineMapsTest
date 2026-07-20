@@ -903,3 +903,19 @@ export function decodeAndBuild(ab, siteLat, siteLon, minDbz, buildLazy, buildGri
         };
     });
 }
+
+// Grids-only fast path for the inspector. Parses the volume and builds ONLY the requested product's value
+// grid (reusing that product's builder, discarding its geometry), so turning Inspect on doesn't pay a full
+// decodeAndBuild — all six products' geometry PLUS a redundant velocity dealias — just to read one product's
+// values. Non-velocity grids are cheap (no dealias); velocity's grid still runs its dealias (the inspector
+// shows the dealiased value), but only for velocity, not the whole registry. The host MERGES the returned
+// grid into the existing frame, leaving its geometry untouched. Returns { grids: { [productId]: grid|null } }.
+export function decodeGridOnly(ab, siteLat, siteLon, minDbz, productId) {
+    return loadDecoder().then(function (dec) {
+        const radar = new dec.Level2Radar(dec.Buffer.from(new Uint8Array(ab)));
+        const builder = BUILDERS[productId];
+        const grids = {};
+        grids[productId] = builder ? (builder(radar, siteLat, siteLon, minDbz, true).grid || null) : null;
+        return { grids: grids, gridProduct: productId };
+    });
+}
