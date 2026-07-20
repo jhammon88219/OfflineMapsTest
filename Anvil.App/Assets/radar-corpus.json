@@ -1,0 +1,10 @@
+{
+  "note": "Fixed corpus for the velocity-dealias regression harness (dev-only). Each volume is a committed .V06 under Assets/RadarCorpus/, replayed through the REAL decode/dealias path (radar-decode.js decodeAndBuild -> dealiasSweep) and scored on its over-unfold ratio (hi/total, |v|>55 m/s gates). 'expectedPct' is the established baseline over-unfold percentage; a run flags a volume 'Worse' when actual exceeds expectedPct + tolerancePct (the KTLX-3x-regression guard). To score a volume WITHOUT committing it, drop the .V06 into Assets/RadarCorpus/ (it is served the same way) and list it here by filename, then just don't 'git add' it. Seed cases from docs/radar-validation.md 'First full network sweep (2026-07-20)'.",
+  "volumes": [
+    { "id": "KBUF-140342", "file": "KBUF_20260720_140342.V06", "name": "Buffalo (31% anomaly seed, idx6)", "lat": 42.9486, "lon": -78.7369, "expectedPct": 31.3, "tolerancePct": 2.0 },
+    { "id": "KBUF-134625", "file": "KBUF_20260720_134625.V06", "name": "Buffalo (3% companion, idx4)", "lat": 42.9486, "lon": -78.7369, "expectedPct": 3.0, "tolerancePct": 2.0 },
+    { "id": "KCBX-145302", "file": "KCBX_20260720_145302.V06", "name": "Boise (3-5% cluster)",       "lat": 43.4908, "lon": -116.2344, "expectedPct": 3.6, "tolerancePct": 2.0 },
+    { "id": "KGRB-153535", "file": "KGRB_20260720_153535.V06", "name": "Green Bay (3-5% cluster)",   "lat": 44.4983, "lon": -88.1111, "expectedPct": 4.4, "tolerancePct": 2.0 },
+    { "id": "KIWA-145829", "file": "KIWA_20260720_145829.V06", "name": "Phoenix (3-5% cluster)",     "lat": 33.2892, "lon": -111.6692, "expectedPct": 4.2, "tolerancePct": 2.0 }
+  ]
+}

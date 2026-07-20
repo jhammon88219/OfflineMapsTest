@@ -976,4 +976,66 @@
             hostLog('inspect=' + inspecting);
         },
     };
+
+    // ---- Dev-only velocity-dealias validation (fixed-corpus regression scorer) ----
+    // Replays each committed corpus .V06 through the REAL decode/dealias path (decodeAndBuild ->
+    // dealiasSweep) and records its over-unfold ratio (hi/total = |v|>55 m/s gates, the same field
+    // the diagnostics call "dealias hi"), so a dealias change can be regressed offline against a
+    // fixed baseline — same bytes in, same ratio out (dealiasSweepCore is deterministic). Fully
+    // ISOLATED from the live loop: it touches no frames[]/layer/token state, so a run is safe over a
+    // live map and can't perturb what's on screen. The host starts it, then polls
+    // window.__anvilValidation until `finished` (the async decode's Promise can't be awaited through
+    // ExecuteScriptAsync). entries = [{ id, url, lat, lon }]. See RadarValidationViewModel /
+    // docs/radar-validation.md.
+    window.radarValidate = function (entriesJson) {
+        var entries;
+        try { entries = JSON.parse(entriesJson); } catch (e) { entries = []; }
+        if (!Array.isArray(entries)) entries = [];
+        // Progress global the host polls; reset on every run.
+        var state = { total: entries.length, done: 0, finished: false, cancel: false, results: [] };
+        window.__anvilValidation = state;
+        hostLog('validate start n=' + entries.length);
+
+        import('./radar-decode.js').then(function (m) {
+            // Volumes are scored one at a time: _dealiasInfo (the source of hi/total) is a decoder
+            // global set during each build, so decodes must NOT overlap. Yielding between volumes lets
+            // the host poll see progress and keeps the UI from wedging through the whole corpus.
+            function step(i) {
+                if (i >= entries.length || state.cancel) {
+                    state.finished = true;
+                    hostLog('validate done ' + state.done + '/' + state.total + (state.cancel ? ' (cancelled)' : ''));
+                    return;
+                }
+                var e = entries[i] || {};
+                fetch(e.url, { cache: 'no-store' }).then(function (r) {
+                    if (!r.ok) throw new Error('HTTP ' + r.status);
+                    return r.arrayBuffer();
+                }).then(function (ab) {
+                    // Force the velocity build (buildLazy=true) so dealias runs; grids off (only the ratio matters).
+                    return m.decodeAndBuild(ab, e.lat || 0, e.lon || 0, MIN_DBZ, true, false);
+                }).then(function (res) {
+                    var hi = 0, tot = 0;
+                    var mm = /hi=(\d+)\/(\d+)/.exec((res && res.dealias) || '');
+                    if (mm) { hi = +mm[1]; tot = +mm[2]; }
+                    var ratio = tot > 0 ? hi / tot : 0;
+                    state.results.push({
+                        id: e.id, gatesOver: hi, gatesTotal: tot, ratio: ratio,
+                        error: (res && res.dealias) ? null : 'no velocity',
+                    });
+                    hostLog('validate ' + e.id + ' hi=' + hi + '/' + tot + ' (' + (ratio * 100).toFixed(1) + '%)');
+                }).catch(function (err) {
+                    var msg = String((err && err.message) ? err.message : err);
+                    state.results.push({ id: e.id, gatesOver: 0, gatesTotal: 0, ratio: 0, error: msg });
+                    hostLog('validate ' + e.id + ' error: ' + msg);
+                }).then(function () {
+                    state.done++;
+                    setTimeout(function () { step(i + 1); }, 0);
+                });
+            }
+            step(0);
+        }).catch(function (err) {
+            state.finished = true;
+            hostLog('validate load failed: ' + ((err && err.message) ? err.message : err));
+        });
+    };
 })();

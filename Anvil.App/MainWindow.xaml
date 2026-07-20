@@ -54,6 +54,25 @@
                                     Margin="{StaticResource FloatingWindowMargin}"
                                     ViewModel="{x:Bind ViewModel}"/>
 
+        <!-- DEV-ONLY site-sweep card. Same floating layer/margin; open state is the card's own IsCardOpen
+             (toggled by the dev Sweep button below). Collapsed entirely in Release via DevVisibility. -->
+        <sections:DevSweepCard x:Name="SweepCard" Grid.Row="0"
+                               VerticalAlignment="Bottom" HorizontalAlignment="Right"
+                               Margin="{StaticResource FloatingWindowMargin}"
+                               Visibility="{x:Bind DevVisibility}"
+                               SweepVm="{x:Bind SweepVm}"
+                               ReportRequested="OnSweepReportRequested"/>
+
+        <!-- DEV-ONLY dealias-validation card (fixed-corpus regression scorer). Same floating layer/margin;
+             open state is the card's own IsCardOpen (toggled by the dev Validate button below). Collapsed
+             entirely in Release via DevVisibility. -->
+        <sections:DevValidationCard x:Name="ValidationCard" Grid.Row="0"
+                                    VerticalAlignment="Bottom" HorizontalAlignment="Right"
+                                    Margin="{StaticResource FloatingWindowMargin}"
+                                    Visibility="{x:Bind DevVisibility}"
+                                    ViewModel="{x:Bind ValidationVm}"
+                                    ReportRequested="OnValidationReportRequested"/>
+
         <!-- ===== Row 1: the bar chrome. BarContent holds the bar's own controls — left: temporal
              split-toggles; center: loop controls + product; right: Sites + Settings. ===== -->
         <ctl:OverlayBar Grid.Row="1">
@@ -78,6 +97,33 @@
                          Each latches while its panel/card is open. -->
                     <StackPanel HorizontalAlignment="Right" VerticalAlignment="Center"
                                 Orientation="Horizontal" Spacing="10">
+                        <!-- DEV-ONLY: opens the site-sweep card. Collapsed in Release via DevVisibility;
+                             IsChecked mirrors the card's own open state. -->
+                        <StackPanel Orientation="Vertical" Spacing="5" Visibility="{x:Bind DevVisibility}">
+                            <TextBlock Text="Sweep" FontSize="11" FontWeight="SemiBold"
+                                       CharacterSpacing="60" HorizontalAlignment="Center"
+                                       Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                            <ToggleButton Width="40" Height="40" MinWidth="0" MinHeight="0" Padding="0"
+                                          CornerRadius="6"
+                                          HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                                          FontFamily="Segoe Fluent Icons,Segoe MDL2 Assets" FontSize="18"
+                                          Content="&#xE9F5;"
+                                          ToolTipService.ToolTip="Dev: automated site sweep"
+                                          IsChecked="{x:Bind SweepCard.IsCardOpen, Mode=TwoWay}"/>
+                        </StackPanel>
+                        <!-- DEV-ONLY: opens the dealias-validation card (fixed-corpus regression scorer). -->
+                        <StackPanel Orientation="Vertical" Spacing="5" Visibility="{x:Bind DevVisibility}">
+                            <TextBlock Text="Validate" FontSize="11" FontWeight="SemiBold"
+                                       CharacterSpacing="60" HorizontalAlignment="Center"
+                                       Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                            <ToggleButton Width="40" Height="40" MinWidth="0" MinHeight="0" Padding="0"
+                                          CornerRadius="6"
+                                          HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                                          FontFamily="Segoe Fluent Icons,Segoe MDL2 Assets" FontSize="18"
+                                          Content="&#xE9D9;"
+                                          ToolTipService.ToolTip="Dev: velocity-dealias validation (fixed corpus)"
+                                          IsChecked="{x:Bind ValidationCard.IsCardOpen, Mode=TwoWay}"/>
+                        </StackPanel>
                         <StackPanel Orientation="Vertical" Spacing="5">
                             <TextBlock Text="Sites" FontSize="11" FontWeight="SemiBold"
                                        CharacterSpacing="60" HorizontalAlignment="Center"

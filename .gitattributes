@@ -72,3 +72,12 @@
 # actually wrote. See Assets/Map/README.md for what each file is and why it's JS.
 ###############################################################################
 Anvil.App/Assets/Map/vendor/** linguist-vendored
+
+###############################################################################
+# Dev-only fixed corpus for the velocity-dealias regression harness: committed
+# NEXRAD Level II .V06 volumes (binary, ~10 MB each) replayed through the real
+# decode/dealias path. Treat as binary and keep them out of the language stats.
+# See docs/radar-validation.md.
+###############################################################################
+Anvil.App/Assets/RadarCorpus/*.V06 binary
+Anvil.App/Assets/RadarCorpus/** linguist-vendored

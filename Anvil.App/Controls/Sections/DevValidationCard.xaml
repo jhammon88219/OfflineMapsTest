@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- DevValidationCard — DEV-ONLY. The run controls for the velocity-dealias regression harness
+     (RadarValidationViewModel), floating above the OverlayBar like the site-sweep card and using the
+     same ControlCard chrome. Opened by the dev "Validate" button on the bar's right edge (visible only
+     in Debug builds). Runs the whole fixed corpus each time (deterministic), so it needs no params —
+     just Run / Stop / Report. The finished report opens in ValidationReportDialog (Save / Close). Bound
+     to a RadarValidationViewModel; see docs/radar-validation.md. Mirrors DevSweepCard. -->
+<UserControl x:Class="Anvil.Controls.Sections.DevValidationCard"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ctl="using:Anvil.Controls"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             mc:Ignorable="d">
+
+    <Grid>
+        <ctl:ControlCard Title="Dealias validation (dev)"
+                         CloseRequested="OnCardCloseRequested"
+                         Visibility="{x:Bind VisibleWhen(IsCardOpen), Mode=OneWay}">
+            <ctl:ControlCard.CardBody>
+                <Grid RowSpacing="8" VerticalAlignment="Top">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/> <!-- status / live progress (TOP so it can't clip) -->
+                        <RowDefinition Height="Auto"/> <!-- what it does -->
+                        <RowDefinition Height="Auto"/> <!-- run/stop + report -->
+                    </Grid.RowDefinitions>
+
+                    <!-- Live status + per-volume progress. Prominent, at the top, always visible. -->
+                    <Border Grid.Row="0" CornerRadius="6" Padding="10,7"
+                            Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}">
+                        <TextBlock TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
+                                   FontSize="14" FontWeight="SemiBold"
+                                   Foreground="{ThemeResource TextFillColorPrimaryBrush}"
+                                   Text="{x:Bind ViewModel.StatusText, Mode=OneWay}"/>
+                    </Border>
+
+                    <TextBlock Grid.Row="1" TextWrapping="Wrap" FontSize="12"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               Text="Replays the fixed corpus (Assets/radar-corpus.json) through the real decode/dealias path and flags any volume whose over-unfold % exceeds its baseline."/>
+
+                    <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="8">
+                        <Button Content="Run" Click="OnRunClick"
+                                IsEnabled="{x:Bind ViewModel.IsIdle, Mode=OneWay}"/>
+                        <Button Content="Stop" Click="OnStopClick"
+                                IsEnabled="{x:Bind ViewModel.IsRunning, Mode=OneWay}"/>
+                        <Button Content="Report…" Click="OnReportClick"
+                                IsEnabled="{x:Bind ViewModel.HasReport, Mode=OneWay}"/>
+                    </StackPanel>
+                </Grid>
+            </ctl:ControlCard.CardBody>
+        </ctl:ControlCard>
+    </Grid>
+</UserControl>

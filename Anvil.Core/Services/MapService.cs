@@ -114,6 +114,18 @@ namespace Anvil.Services
 		public Task ClearDowFrameAsync() =>
 			_mapView.RunScriptAsync(Call("clearDowFrame"));
 
+		// Dev-only velocity-dealias validation harness. entriesJson is single-quoted and JSON.parsed in
+		// the shim (same pattern as the remap payload). The poll returns the progress global's JSON
+		// directly (ExecuteScriptAsync serializes the object) so the VM parses it without double-decoding.
+		public Task StartRadarValidationAsync(string entriesJson) =>
+			_mapView.RunScriptAsync(Call("radarValidate", entriesJson));
+
+		public Task<string> PollRadarValidationAsync() =>
+			_mapView.RunScriptAsync("(window.__anvilValidation||null)");
+
+		public Task CancelRadarValidationAsync() =>
+			_mapView.RunScriptAsync("if(window.__anvilValidation){window.__anvilValidation.cancel=true;}");
+
 		// Builds a "window.fn(a,b,c);" call string, formatting each argument for JS:
 		// doubles in invariant culture, bools lowercased, strings single-quoted. This
 		// centralizes the JS string-building (and culture handling) for every command.

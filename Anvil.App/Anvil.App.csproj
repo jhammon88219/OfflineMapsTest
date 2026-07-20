@@ -56,6 +56,36 @@
     <Content Include="Assets\Wide310x150Logo.scale-200.png" />
   </ItemGroup>
 
+  <!-- DEV-ONLY: the fixed corpus for the velocity-dealias regression harness (manifest + the committed
+       ~10 MB .V06 volumes it references, served to the WebView via the "radarcorpus" host). Debug only,
+       so the ~40 MB never ships in a Release MSIX — the harness is unreachable there anyway (DevVisibility
+       collapses its UI, ValidationVm is null). See docs/radar-validation.md and RadarCorpusProvider. -->
+  <ItemGroup Condition="'$(Configuration)'=='Debug'">
+    <Content Include="Assets\radar-corpus.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <!-- Listed explicitly (NOT a *.V06 glob): MSIX packaging reliably stages named Content into the AppX
+         layout the deployed app runs from, but a glob's matches are copied to the output dir yet dropped
+         from the package payload — so a globbed volume 404s at runtime ("Failed to fetch"). To score an
+         uncommitted local volume, drop it in this folder and add its own Content line here (don't git add
+         the .V06). Keep these in sync with radar-corpus.json. -->
+    <Content Include="Assets\RadarCorpus\KBUF_20260720_140342.V06">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Assets\RadarCorpus\KBUF_20260720_134625.V06">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Assets\RadarCorpus\KCBX_20260720_145302.V06">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Assets\RadarCorpus\KGRB_20260720_153535.V06">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Assets\RadarCorpus\KIWA_20260720_145829.V06">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
   <ItemGroup>
     <Manifest Include="$(ApplicationManifest)" />
   </ItemGroup>

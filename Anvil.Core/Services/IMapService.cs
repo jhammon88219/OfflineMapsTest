@@ -157,5 +157,24 @@ namespace Anvil.Services
 
 		/// <summary>Removes the shown DOW frame (clears the radar layer).</summary>
 		Task ClearDowFrameAsync();
+
+		// ── Dev-only: velocity-dealias validation harness (see RadarValidationViewModel) ──
+		// The scorer replays a fixed corpus through the real decode/dealias path and reports each
+		// volume's over-unfold ratio. Because the async decode's Promise can't be awaited through
+		// ExecuteScriptAsync, the VM starts the run then polls a JS progress global (like the site
+		// sweep polls RadarDiagnostics), rather than routing a message back.
+
+		/// <summary>Starts a validation run over the given corpus. <paramref name="entriesJson"/> is a JSON
+		/// array of <c>{ id, url, lat, lon }</c>; the WebView decodes each volume (forcing the velocity
+		/// dealias build) and accumulates results into its <c>window.__anvilValidation</c> global.</summary>
+		Task StartRadarValidationAsync(string entriesJson);
+
+		/// <summary>Reads back the current run's progress global as JSON (<c>{ total, done, finished,
+		/// results:[{id, gatesOver, gatesTotal, ratio, error}] }</c>), or the literal <c>null</c> before a
+		/// run starts. Polled until <c>finished</c>.</summary>
+		Task<string> PollRadarValidationAsync();
+
+		/// <summary>Signals the in-flight validation run to stop after the current volume.</summary>
+		Task CancelRadarValidationAsync();
 	}
 }

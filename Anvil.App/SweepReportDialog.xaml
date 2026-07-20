@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SweepReportDialog — DEV-ONLY. The site-sweep results pop-up: a summary line over a scrollable,
+     read-only monospace dump of the report (suspects first), with Save… (writes the markdown to disk via
+     a FileSavePicker) and Close. A ContentDialog like SettingsDialog. Populated from a SweepReport. -->
+<ContentDialog x:Class="Anvil.SweepReportDialog"
+               xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+               xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+               xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+               xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+               mc:Ignorable="d"
+               Title="Site sweep report"
+               PrimaryButtonText="Save…"
+               CloseButtonText="Close"
+               DefaultButton="Close"
+               PrimaryButtonClick="OnSaveClick">
+
+    <Grid RowSpacing="8" Width="640" Height="460">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <TextBlock x:Name="SummaryText" Grid.Row="0" TextWrapping="Wrap"
+                   FontWeight="SemiBold"/>
+
+        <!-- Read-only monospace body so the columns line up; scrolls for a full 160-site run. -->
+        <TextBox x:Name="ReportText" Grid.Row="1"
+                 IsReadOnly="True" AcceptsReturn="True" TextWrapping="NoWrap"
+                 FontFamily="Cascadia Mono,Consolas,monospace" FontSize="12"
+                 ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                 ScrollViewer.VerticalScrollBarVisibility="Auto"/>
+    </Grid>
+</ContentDialog>

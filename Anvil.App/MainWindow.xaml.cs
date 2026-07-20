@@ -17,6 +17,45 @@ namespace Anvil
 	{
 		public MapViewModel ViewModel { get; }
 
+		/// <summary>DEV-ONLY site-sweep engine. Non-null only in Debug builds (see the ctor). The dev
+		/// button + card bind to this and are collapsed in Release via <see cref="DevVisibility"/>.</summary>
+		public SiteSweepViewModel? SweepVm { get; }
+
+		/// <summary>DEV-ONLY velocity-dealias validation engine (fixed-corpus regression scorer). Non-null
+		/// only in Debug builds. Its button + card bind to this and are collapsed in Release via
+		/// <see cref="DevVisibility"/>.</summary>
+		public RadarValidationViewModel? ValidationVm { get; }
+
+		/// <summary>Visibility of the dev-only tools (the sweep button + card). Visible in Debug,
+		/// Collapsed in Release, so the sweep is never reachable in a shipped build.</summary>
+#if DEBUG
+		public Visibility DevVisibility => Visibility.Visible;
+#else
+		public Visibility DevVisibility => Visibility.Collapsed;
+#endif
+
+		// Opens the site-sweep results pop-up (Save / Close). Raised by the dev card on run completion
+		// or its Report button.
+		private async void OnSweepReportRequested(object? sender, SweepReport report)
+		{
+			var dialog = new SweepReportDialog(report, WinRT.Interop.WindowNative.GetWindowHandle(this))
+			{
+				XamlRoot = Content.XamlRoot,
+			};
+			await dialog.ShowAsync();
+		}
+
+		// Opens the dealias-validation results pop-up (Save / Close). Raised by the dev validation card on
+		// run completion or its Report button.
+		private async void OnValidationReportRequested(object? sender, RadarValidationReport report)
+		{
+			var dialog = new ValidationReportDialog(report, WinRT.Interop.WindowNative.GetWindowHandle(this))
+			{
+				XamlRoot = Content.XamlRoot,
+			};
+			await dialog.ShowAsync();
+		}
+
 		// Routes JS→C# WebView2 messages to the view models + diagnostics (owns the map-ready latch).
 		private readonly WebMessageRouter _router;
 
@@ -85,6 +124,17 @@ namespace Anvil
 
 			ViewModel = new MapViewModel(mapService, styleProvider, regionProvider, _spcOutlookService, _spcWatchService, radarSiteProvider, _radarService, locationService, dowEventProvider, dispatcher);
 			_router = new WebMessageRouter(ViewModel);
+
+#if DEBUG
+			// DEV-ONLY automated site sweep. Constructed only in Debug; the button + card that reach it are
+			// hidden in Release via DevVisibility, so the tool is unreachable in a shipped build. (The engine
+			// TYPE lives in Anvil.Core and ships with it, but is never constructed here in Release.)
+			SweepVm = new SiteSweepViewModel(ViewModel.Radar);
+
+			// DEV-ONLY velocity-dealias regression harness (fixed-corpus scorer). Same Debug-only lifetime
+			// as the sweep: driven through the map service (window.radarValidate) against the bundled corpus.
+			ValidationVm = new RadarValidationViewModel(_mapService, new RadarCorpusProvider());
+#endif
 
 			// Push the OS theme accent to the radar-site status halo once the page is ready, and re-push
 			// whenever the OS accent/theme changes — mirrors the OverlayBar's live-tinted accent shadow.
@@ -163,6 +213,15 @@ namespace Anvil
 				webView.CoreWebView2.SetVirtualHostNameToFolderMapping(
 					host, folder, CoreWebView2HostResourceAccessKind.Allow);
 			}
+
+#if DEBUG
+			// DEV-ONLY: serve the fixed velocity-dealias corpus (Assets/RadarCorpus, Debug-only Content) so
+			// window.radarValidate can fetch each volume same-origin. Not mapped in Release (the folder
+			// isn't bundled there and the harness is unreachable).
+			webView.CoreWebView2.SetVirtualHostNameToFolderMapping(
+				Services.RadarCorpusProvider.CorpusHostName, Services.RadarCorpusProvider.CorpusDirectory,
+				CoreWebView2HostResourceAccessKind.Allow);
+#endif
 
 			webView.CoreWebView2.WebMessageReceived += _router.OnWebMessageReceived;
 			webView.Source = new Uri(url);

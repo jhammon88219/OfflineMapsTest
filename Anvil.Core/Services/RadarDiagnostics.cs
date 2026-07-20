@@ -140,6 +140,28 @@ namespace Anvil.Services
 			}
 		}
 
+		/// <summary>An immutable read-back of the CURRENT session's outcome. The per-frame suspect
+		/// heuristics + quarantine already run live (see the class summary); this just lets a caller read
+		/// the tally out before the next <see cref="BeginSession"/> resets it. Used by the dev site-sweep
+		/// (<see cref="Anvil.ViewModels.SiteSweepViewModel"/>) to capture each site's result before moving
+		/// on — the anomalies are otherwise only in the JSONL, not in memory across sessions.</summary>
+		public sealed record SessionSnapshot(
+			string? Site, int FrameCount, int ReadyCount, int SuspectCount, IReadOnlyList<string> SuspectReasons);
+
+		/// <summary>Snapshots the current session. Thread-safe; copies out so the caller holds no lock.</summary>
+		public static SessionSnapshot SnapshotSession()
+		{
+			lock (Gate)
+			{
+				return new SessionSnapshot(
+					Live.Site,
+					Live.FrameCount,
+					Live.ReadyCount,
+					Live.Anomalies.Count,
+					Live.Anomalies.Select(a => a.Reason).ToList());
+			}
+		}
+
 		/// <summary>Records a load-timing milestone (first frame / all frames / first live) once.</summary>
 		public static void Timing(string which, double seconds)
 		{
