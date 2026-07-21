@@ -1,15 +1,14 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
-using System.ComponentModel;
 using System.Globalization;
 using System.Linq;
-using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Anvil.Models;
 using Anvil.Services;
+using CommunityToolkit.Mvvm.ComponentModel;
 
 namespace Anvil.ViewModels
 {
@@ -31,7 +30,7 @@ namespace Anvil.ViewModels
 	/// sweep drives <see cref="RadarViewModel.SelectedRadarOption"/> (a WinUI-bound property) and updates
 	/// its own bound progress fields.
 	/// </summary>
-	public sealed class SiteSweepViewModel : INotifyPropertyChanged
+	public sealed class SiteSweepViewModel : ObservableObject
 	{
 		private readonly RadarViewModel _radar;
 
@@ -49,7 +48,7 @@ namespace Anvil.ViewModels
 		public int DwellSeconds
 		{
 			get => _dwellSeconds;
-			set => SetField(ref _dwellSeconds, Math.Clamp(value, 5, 600));
+			set => SetProperty(ref _dwellSeconds, Math.Clamp(value, 5, 600));
 		}
 
 		private int _perSiteTimeoutSeconds = 90;
@@ -58,7 +57,7 @@ namespace Anvil.ViewModels
 		public int PerSiteTimeoutSeconds
 		{
 			get => _perSiteTimeoutSeconds;
-			set => SetField(ref _perSiteTimeoutSeconds, Math.Clamp(value, 10, 1200));
+			set => SetProperty(ref _perSiteTimeoutSeconds, Math.Clamp(value, 10, 1200));
 		}
 
 		private int _framesPerSite;
@@ -67,7 +66,7 @@ namespace Anvil.ViewModels
 		public int FramesPerSite
 		{
 			get => _framesPerSite;
-			set => SetField(ref _framesPerSite, Math.Max(0, value));
+			set => SetProperty(ref _framesPerSite, Math.Max(0, value));
 		}
 
 		private bool _skipOffline = true;
@@ -76,7 +75,7 @@ namespace Anvil.ViewModels
 		public bool SkipOffline
 		{
 			get => _skipOffline;
-			set => SetField(ref _skipOffline, value);
+			set => SetProperty(ref _skipOffline, value);
 		}
 
 		private bool _operationalOnly = true;
@@ -87,7 +86,7 @@ namespace Anvil.ViewModels
 		public bool OperationalOnly
 		{
 			get => _operationalOnly;
-			set => SetField(ref _operationalOnly, value);
+			set => SetProperty(ref _operationalOnly, value);
 		}
 
 		// ── Live progress (bound to the params card while running) ──
@@ -98,7 +97,7 @@ namespace Anvil.ViewModels
 			get => _isRunning;
 			private set
 			{
-				if (SetField(ref _isRunning, value))
+				if (SetProperty(ref _isRunning, value))
 				{
 					OnPropertyChanged(nameof(IsIdle));
 				}
@@ -111,7 +110,7 @@ namespace Anvil.ViewModels
 		public string StatusText
 		{
 			get => _statusText;
-			private set => SetField(ref _statusText, value);
+			private set => SetProperty(ref _statusText, value);
 		}
 
 		/// <summary>Per-site results, appended live as the sweep runs (also the report's rows).</summary>
@@ -125,7 +124,7 @@ namespace Anvil.ViewModels
 			get => _lastReport;
 			private set
 			{
-				if (SetField(ref _lastReport, value))
+				if (SetProperty(ref _lastReport, value))
 				{
 					OnPropertyChanged(nameof(HasReport));
 				}
@@ -315,16 +314,6 @@ namespace Anvil.ViewModels
 		private static IReadOnlyList<string> Distinct(IReadOnlyList<string> reasons) =>
 			reasons.Count == 0 ? Array.Empty<string>() : reasons.Distinct().ToList();
 
-		public event PropertyChangedEventHandler? PropertyChanged;
-		private void OnPropertyChanged([CallerMemberName] string? name = null) =>
-			PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
-		private bool SetField<T>(ref T field, T value, [CallerMemberName] string? name = null)
-		{
-			if (EqualityComparer<T>.Default.Equals(field, value)) return false;
-			field = value;
-			OnPropertyChanged(name);
-			return true;
-		}
 	}
 
 	/// <summary>How one site's sweep turned out.</summary>

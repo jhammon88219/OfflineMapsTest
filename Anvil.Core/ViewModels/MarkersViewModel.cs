@@ -1,10 +1,9 @@
 using System.Collections.Generic;
-using System.ComponentModel;
 using System.Linq;
-using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using Anvil.Models;
 using Anvil.Services;
+using CommunityToolkit.Mvvm.ComponentModel;
 
 namespace Anvil.ViewModels
 {
@@ -13,7 +12,7 @@ namespace Anvil.ViewModels
 	/// status) and the selectable/draggable marker entity (the Selected Marker readout). Extracted
 	/// from MapViewModel; drives the map through <see cref="IMapService"/>.
 	/// </summary>
-	public sealed class MarkersViewModel : INotifyPropertyChanged
+	public sealed class MarkersViewModel : ObservableObject
 	{
 		private readonly IMapService _mapService;
 		private readonly ILocationService _locationService;
@@ -67,13 +66,10 @@ namespace Anvil.ViewModels
 			get => _isLocating;
 			private set
 			{
-				if (_isLocating == value)
+				if (SetProperty(ref _isLocating, value))
 				{
-					return;
+					OnPropertyChanged(nameof(CanLocate));
 				}
-				_isLocating = value;
-				OnPropertyChanged();
-				OnPropertyChanged(nameof(CanLocate));
 			}
 		}
 
@@ -89,13 +85,10 @@ namespace Anvil.ViewModels
 
 		private void SetLocateStatus(string text)
 		{
-			if (_locateStatus == text)
+			if (SetProperty(ref _locateStatus, text, nameof(LocateStatusText)))
 			{
-				return;
+				OnPropertyChanged(nameof(HasLocateStatus));
 			}
-			_locateStatus = text;
-			OnPropertyChanged(nameof(LocateStatusText));
-			OnPropertyChanged(nameof(HasLocateStatus));
 		}
 
 		/// <summary>
@@ -161,14 +154,11 @@ namespace Anvil.ViewModels
 			get => _selectedMarker;
 			private set
 			{
-				if (ReferenceEquals(_selectedMarker, value))
+				if (SetProperty(ref _selectedMarker, value))
 				{
-					return;
+					OnPropertyChanged(nameof(HasSelectedMarker));
+					RaiseSelectedMarker();
 				}
-				_selectedMarker = value;
-				OnPropertyChanged();
-				OnPropertyChanged(nameof(HasSelectedMarker));
-				RaiseSelectedMarker();
 			}
 		}
 
@@ -260,13 +250,6 @@ namespace Anvil.ViewModels
 				_ = _mapService.ClearUserLocationAsync();
 			}
 			SelectedMarker = null;
-		}
-
-		public event PropertyChangedEventHandler? PropertyChanged;
-
-		private void OnPropertyChanged([CallerMemberName] string? propertyName = null)
-		{
-			PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
 		}
 	}
 }

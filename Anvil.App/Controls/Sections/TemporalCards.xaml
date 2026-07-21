@@ -39,8 +39,10 @@
             </ctl:ControlCard.CardBody>
         </ctl:ControlCard>
 
-        <!-- Now: live radar. Hosts the "now"-oriented options (today: SPC watch boxes). -->
+        <!-- Now: live radar. Hosts the "now"-oriented options (SPC watch boxes + storm-based warnings).
+             Taller than the default to fit both the watches and warnings rows. -->
         <ctl:ControlCard Title="Live Radar"
+                         CardHeight="352"
                          CloseRequested="OnCardCloseRequested"
                          Visibility="{x:Bind VisibleWhen(ViewModel.IsNowCardOpen), Mode=OneWay}">
             <ctl:ControlCard.CardBody>

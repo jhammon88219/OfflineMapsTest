@@ -1,5 +1,4 @@
-using System.ComponentModel;
-using System.Runtime.CompilerServices;
+using CommunityToolkit.Mvvm.ComponentModel;
 
 namespace Anvil.ViewModels
 {
@@ -12,7 +11,7 @@ namespace Anvil.ViewModels
 	/// consistent "loading" look for every product. <see cref="ReadyOpacity"/> is the derived double
 	/// (no converter needed): full when ready, faint while still loading.
 	/// </summary>
-	public sealed class RadarFrameSegment : INotifyPropertyChanged
+	public sealed class RadarFrameSegment : ObservableObject
 	{
 		private bool _isDecoded;
 		private bool _isReady;
@@ -22,12 +21,7 @@ namespace Anvil.ViewModels
 		public bool IsDecoded
 		{
 			get => _isDecoded;
-			set
-			{
-				if (_isDecoded == value) return;
-				_isDecoded = value;
-				OnPropertyChanged();
-			}
+			set => SetProperty(ref _isDecoded, value);
 		}
 
 		/// <summary>Displayed readiness for the currently-active product (set by the VM): decoded for
@@ -37,19 +31,14 @@ namespace Anvil.ViewModels
 			get => _isReady;
 			set
 			{
-				if (_isReady == value) return;
-				_isReady = value;
-				OnPropertyChanged();
-				OnPropertyChanged(nameof(ReadyOpacity));
+				if (SetProperty(ref _isReady, value))
+				{
+					OnPropertyChanged(nameof(ReadyOpacity));
+				}
 			}
 		}
 
 		/// <summary>Cell opacity: solid when the frame is ready for the active product, faint while loading.</summary>
 		public double ReadyOpacity => _isReady ? 1.0 : 0.22;
-
-		public event PropertyChangedEventHandler? PropertyChanged;
-
-		private void OnPropertyChanged([CallerMemberName] string? name = null) =>
-			PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 	}
 }

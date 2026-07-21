@@ -78,6 +78,10 @@ namespace Anvil
 		// MainWindow owns the WebView2 host mapping for its cache folder.
 		private readonly ISpcWatchService _spcWatchService;
 
+		// Storm-based warning data layer (fetch + cache of active Tornado / Severe Thunderstorm warning
+		// polygons). Same reason — MainWindow owns the WebView2 host mapping for its cache folder.
+		private readonly IWarningService _warningService;
+
 		// Level II radar data layer (fetch + cache of .V06 volumes). Kept here because
 		// MainWindow owns the WebView2 host mapping for its cache folder.
 		private readonly ILevel2RadarService _radarService;
@@ -102,6 +106,7 @@ namespace Anvil
 			// virtual host in InitializeWebViewAsync.
 			_spcOutlookService = new SpcOutlookService();
 			_spcWatchService = new SpcWatchService();
+			_warningService = new WarningService();
 			_radarService = new Level2RadarService();
 			var radarSiteProvider = new RadarSiteProvider();
 			var locationService = new LocationService();
@@ -122,7 +127,7 @@ namespace Anvil
 			// DispatcherQueue.GetForCurrentThread resolves the calling thread's queue — see WinUiDispatcher.
 			var dispatcher = new Services.WinUiDispatcher();
 
-			ViewModel = new MapViewModel(mapService, styleProvider, regionProvider, _spcOutlookService, _spcWatchService, radarSiteProvider, _radarService, locationService, dowEventProvider, dispatcher);
+			ViewModel = new MapViewModel(mapService, styleProvider, regionProvider, _spcOutlookService, _spcWatchService, _warningService, radarSiteProvider, _radarService, locationService, dowEventProvider, dispatcher);
 			_router = new WebMessageRouter(ViewModel);
 
 #if DEBUG
@@ -154,6 +159,7 @@ namespace Anvil
 			// keeps refreshing on a timer so a long-running session doesn't sit on stale data.
 			ViewModel.Outlook.StartBackgroundRefresh();
 			ViewModel.Watches.StartBackgroundRefresh();
+			ViewModel.Warnings.StartBackgroundRefresh();
 
 			// Write a final flush + report on close so the run's last events aren't lost between
 			// the ~2 s background flushes.
@@ -196,7 +202,7 @@ namespace Anvil
 			// Map each virtual host → local folder so the page can fetch everything offline, same-origin:
 			//   mapassets  → bundled MapLibre style/glyphs/sprites/libraries
 			//   mapdata    → the user-configured (external, ~29 GB) basemap PMTiles folder
-			//   spcoutlooks/spcwatches/radarlevel2 → the services' on-disk caches
+			//   spcoutlooks/spcwatches/warnings/radarlevel2 → the services' on-disk caches
 			//   dowevents  → the bundled curated DOW (mobile-radar) frames
 			// Services own their cache folders; MainWindow owns the WebView2 mappings.
 			var hostFolders = new (string Host, string Folder)[]
@@ -205,6 +211,7 @@ namespace Anvil
 				("mapdata", _settingsService.MapDataFolder),
 				(SpcOutlookService.CacheHostName, _spcOutlookService.CacheDirectory),
 				(SpcWatchService.CacheHostName, _spcWatchService.CacheDirectory),
+				(WarningService.CacheHostName, _warningService.CacheDirectory),
 				(Level2RadarService.CacheHostName, _radarService.CacheDirectory),
 				(DowEventProvider.HostName, DowEventProvider.EventsDirectory),
 			};

@@ -29,6 +29,9 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/> <!-- Watches -->
             <RowDefinition Height="Auto"/> <!-- Watch opacity -->
+            <RowDefinition Height="Auto"/> <!-- Warnings -->
+            <RowDefinition Height="Auto"/> <!-- Warning active counts -->
+            <RowDefinition Height="Auto"/> <!-- Warning opacity -->
         </Grid.RowDefinitions>
 
         <!-- Watches: active Tornado / Severe Thunderstorm watch boxes. -->
@@ -50,5 +53,47 @@
                 VerticalAlignment="Center"
                 Value="{x:Bind ViewModel.Watches.WatchesOpacity, Mode=TwoWay}"
                 ToolTipService.ToolTip="Overall opacity of the watch polygons"/>
+
+        <!-- Warnings: active storm-based Tornado / Severe Thunderstorm warning polygons (the modern
+             forecaster-drawn polygons). Drawn above the watch boxes. -->
+        <TextBlock Grid.Row="2" Grid.Column="0" Text="Warnings" Style="{StaticResource NowLabelStyle}"/>
+        <CheckBox Grid.Row="2" Grid.Column="1"
+                  Content="Tornado / Severe Thunderstorm"
+                  MinWidth="0"
+                  VerticalAlignment="Center"
+                  IsChecked="{x:Bind ViewModel.Warnings.ShowWarnings, Mode=TwoWay}"
+                  ToolTipService.ToolTip="Show active Tornado / Severe Thunderstorm warning polygons"/>
+
+        <!-- Active counts by type: number of live Tornado / Severe Thunderstorm warnings right now.
+             Color swatches match the map (TO red, SV yellow); the count stays in the default text color
+             so it reads in both light and dark. Updated each refresh cycle from WarningsViewModel. -->
+        <TextBlock Grid.Row="3" Grid.Column="0" Text="Active" Style="{StaticResource NowLabelStyle}"/>
+        <StackPanel Grid.Row="3" Grid.Column="1" Orientation="Horizontal" Spacing="18" VerticalAlignment="Center">
+            <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center"
+                        ToolTipService.ToolTip="Active Tornado Warnings">
+                <Border Width="11" Height="11" CornerRadius="2" Background="#FF2A2A" VerticalAlignment="Center"/>
+                <TextBlock Text="Tornado" Style="{StaticResource NowLabelStyle}"/>
+                <TextBlock Text="{x:Bind Fmt(ViewModel.Warnings.TornadoWarningCount), Mode=OneWay}"
+                           FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center"/>
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center"
+                        ToolTipService.ToolTip="Active Severe Thunderstorm Warnings">
+                <Border Width="11" Height="11" CornerRadius="2" Background="#FFD21A" VerticalAlignment="Center"/>
+                <TextBlock Text="Severe" Style="{StaticResource NowLabelStyle}"/>
+                <TextBlock Text="{x:Bind Fmt(ViewModel.Warnings.SevereWarningCount), Mode=OneWay}"
+                           FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center"/>
+            </StackPanel>
+        </StackPanel>
+
+        <!-- Opacity: overall warning-polygon opacity (fill + outline together). -->
+        <TextBlock Grid.Row="4" Grid.Column="0" Text="Opacity" Style="{StaticResource NowLabelStyle}"/>
+        <Slider Grid.Row="4" Grid.Column="1"
+                Width="180" HorizontalAlignment="Left"
+                Minimum="0" Maximum="1"
+                StepFrequency="0.05" SmallChange="0.05"
+                IsThumbToolTipEnabled="False"
+                VerticalAlignment="Center"
+                Value="{x:Bind ViewModel.Warnings.WarningsOpacity, Mode=TwoWay}"
+                ToolTipService.ToolTip="Overall opacity of the warning polygons"/>
     </Grid>
 </UserControl>

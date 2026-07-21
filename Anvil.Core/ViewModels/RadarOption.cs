@@ -1,5 +1,5 @@
-using System.ComponentModel;
 using Anvil.Models;
+using CommunityToolkit.Mvvm.ComponentModel;
 
 namespace Anvil.ViewModels
 {
@@ -34,7 +34,7 @@ namespace Anvil.ViewModels
 	/// the WebView (radar-ramps.js) once it loads, and the combo draws each product's ramp from it — so the
 	/// option has to raise a change when its ramp lands.
 	/// </summary>
-	public sealed class RadarProductOption : INotifyPropertyChanged
+	public sealed class RadarProductOption : ObservableObject
 	{
 		public RadarProductOption(string id, string label, string shortLabel, bool isLazy)
 		{
@@ -65,12 +65,12 @@ namespace Anvil.ViewModels
 			get => _ramp;
 			set
 			{
+				// Reference equality on purpose: the ramp is pushed once from the WebView, and a new
+				// RadarRampInfo instance should raise even if value-equal to a prior one.
 				if (ReferenceEquals(_ramp, value)) return;
 				_ramp = value;
-				PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Ramp)));
+				OnPropertyChanged();
 			}
 		}
-
-		public event PropertyChangedEventHandler? PropertyChanged;
 	}
 }

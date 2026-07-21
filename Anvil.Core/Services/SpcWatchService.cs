@@ -29,12 +29,15 @@ namespace Anvil.Services
 		public const string CacheHostName = "spcwatches";
 		private const string CacheFileName = "watches.geojson";
 
-		// WWA MapServer, layer 1 = "WatchesWarnings" (county-aggregated polygons), as GeoJSON,
-		// filtered to convective WATCHES (sig 'A'; phenom TO/SV). WGS84 (outSR=4326) for GeoJSON.
-		private const string QueryUrl =
+		// WWA MapServer, layer 1 = "WatchesWarnings" (county-aggregated polygons), filtered to convective
+		// WATCHES (sig 'A'; phenom TO/SV), WGS84 (outSR=4326). Split into a base + format so we can also
+		// ask for JUST the count to corroborate a suspicious empty GeoJSON — see the RefreshAsync guard.
+		private const string QueryBase =
 			"https://mapservices.weather.noaa.gov/eventdriven/rest/services/WWA/watch_warn_adv/MapServer/1/query" +
 			"?where=sig%3D%27A%27%20AND%20%28phenom%3D%27TO%27%20OR%20phenom%3D%27SV%27%29" +
-			"&outFields=prod_type%2Cphenom%2Cexpiration&returnGeometry=true&outSR=4326&f=geojson";
+			"&outFields=prod_type%2Cphenom%2Cexpiration&returnGeometry=true&outSR=4326";
+		private const string GeoJsonUrl = QueryBase + "&f=geojson";
+		private const string CountUrl = QueryBase + "&returnCountOnly=true&f=json";
 
 		private readonly HttpClient _http;
 
@@ -47,6 +50,11 @@ namespace Anvil.Services
 
 			_http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
 			_http.DefaultRequestHeaders.UserAgent.ParseAdd("Anvil/1.0");
+			// ⚠️ MUST send an Accept header — this NOAA endpoint (Akamai-fronted) caches keyed on Accept
+			// (Vary: Accept). HttpClient sends none by default, landing in a rarely-populated cache
+			// partition that can serve a stale EMPTY FeatureCollection for a whole TTL after an origin
+			// republish, while browsers (Accept: */*) get real data. See WarningService for the full story.
+			_http.DefaultRequestHeaders.Accept.ParseAdd("*/*");
 		}
 
 		public string CacheDirectory { get; }
@@ -60,14 +68,22 @@ namespace Anvil.Services
 
 			try
 			{
-				var json = await _http.GetStringAsync(QueryUrl, cancellationToken);
+				var json = await _http.GetStringAsync(GeoJsonUrl, cancellationToken);
 
-				// Only cache a real FeatureCollection (an empty one — no active watches — is valid and
-				// SHOULD overwrite so the map clears). An ArcGIS error object lacks a features array;
-				// in that case keep the last-known-good cache instead of blanking it.
+				// Only cache a real FeatureCollection. An ArcGIS error object lacks a features array; in
+				// that case keep the last-known-good cache instead of blanking it.
 				if (!TryGetFeatureCount(json, out var count))
 				{
 					return Failed(cacheExists, "Response was not a GeoJSON FeatureCollection.");
+				}
+
+				// ⚠️ An EMPTY GeoJSON is SUSPECT, not trusted — this event-driven origin intermittently
+				// emits a spurious empty set while the count endpoint still reports active features.
+				// Corroborate before caching an empty (which would blank the map): only accept it if the
+				// lighter count endpoint AGREES the set is really zero. See WarningService for the story.
+				if (count == 0 && await RemoteCountAsync(cancellationToken) is > 0)
+				{
+					return Failed(cacheExists, "Empty GeoJSON contradicted by a non-zero count — kept last-known-good.");
 				}
 
 				// Write to a temp file then move over the real one, so a partial/failed write never
@@ -87,6 +103,26 @@ namespace Anvil.Services
 				// Never throw to the caller: keep last-known-good on disk and report it.
 				return Failed(cacheExists, ex.Message);
 			}
+		}
+
+		// Asks the server for JUST the matching feature count (returnCountOnly, Esri JSON — a different,
+		// lighter code path than the GeoJSON export). Used to sanity-check a suspiciously-empty GeoJSON.
+		// Returns the count, or -1 if the check itself failed (so "unknown" doesn't block accepting empty).
+		private async Task<int> RemoteCountAsync(CancellationToken cancellationToken)
+		{
+			try
+			{
+				var json = await _http.GetStringAsync(CountUrl, cancellationToken);
+				if (JsonNode.Parse(json)?["count"] is JsonValue v && v.TryGetValue<int>(out var n))
+				{
+					return n;
+				}
+			}
+			catch
+			{
+				// Count check failed — fall through to -1 ("unknown"); the caller won't block on it.
+			}
+			return -1;
 		}
 
 		private static SpcWatchFetchResult Failed(bool cacheExists, string message) =>

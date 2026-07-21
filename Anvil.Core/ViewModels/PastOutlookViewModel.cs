@@ -2,10 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Linq;
-using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using Anvil.Models;
 using Anvil.Services;
+using CommunityToolkit.Mvvm.ComponentModel;
 
 namespace Anvil.ViewModels
 {
@@ -21,7 +21,7 @@ namespace Anvil.ViewModels
 	/// Fire). Issuance cycle is auto (the one in effect at the replay time for Day 1) with an override
 	/// dropdown. Drives the map through <see cref="IMapService"/>.
 	/// </summary>
-	public sealed class PastOutlookViewModel : INotifyPropertyChanged
+	public sealed class PastOutlookViewModel : ObservableObject
 	{
 		private readonly IMapService _mapService;
 		private readonly ISpcOutlookService _outlookService;
@@ -60,8 +60,7 @@ namespace Anvil.ViewModels
 			set
 			{
 				if (value is null || _selectedDayOption == value) return;
-				_selectedDayOption = value;
-				OnPropertyChanged();
+				SetProperty(ref _selectedDayOption, value);
 
 				// Cascade the product + cycle lists to the new day, keeping the product type if still valid.
 				var keepType = _selectedProductOption?.Type;
@@ -90,8 +89,7 @@ namespace Anvil.ViewModels
 			set
 			{
 				if (value is null || _selectedProductOption == value) return;
-				_selectedProductOption = value;
-				OnPropertyChanged();
+				SetProperty(ref _selectedProductOption, value);
 				_ = ApplyAsync();
 			}
 		}
@@ -129,8 +127,7 @@ namespace Anvil.ViewModels
 			set
 			{
 				if (value is null || _selectedCycleOption == value) return;
-				_selectedCycleOption = value;
-				OnPropertyChanged();
+				SetProperty(ref _selectedCycleOption, value);
 				_ = ApplyAsync();
 			}
 		}
@@ -164,7 +161,7 @@ namespace Anvil.ViewModels
 		public string StatusText
 		{
 			get => _statusText;
-			private set { if (_statusText != value) { _statusText = value; OnPropertyChanged(); } }
+			private set => SetProperty(ref _statusText, value);
 		}
 
 		private string _timesText = string.Empty;
@@ -173,10 +170,10 @@ namespace Anvil.ViewModels
 			get => _timesText;
 			private set
 			{
-				if (_timesText == value) return;
-				_timesText = value;
-				OnPropertyChanged();
-				OnPropertyChanged(nameof(HasTimes));
+				if (SetProperty(ref _timesText, value))
+				{
+					OnPropertyChanged(nameof(HasTimes));
+				}
 			}
 		}
 
@@ -357,10 +354,6 @@ namespace Anvil.ViewModels
 				parts.Add($"Valid {v.ToLocalTime():ddd h:mm tt} → {e.ToLocalTime():ddd h:mm tt}");
 			return string.Join("  ·  ", parts);
 		}
-
-		public event PropertyChangedEventHandler? PropertyChanged;
-		private void OnPropertyChanged([CallerMemberName] string? name = null) =>
-			PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 	}
 
 	/// <summary>One entry in the PastCast outlook product picker (None carries a null type).</summary>

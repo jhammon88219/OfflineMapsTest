@@ -42,6 +42,7 @@ try {
         map.once('idle', function () {
             if (Outlook) Outlook.reAdd(map); // re-add the outlook (reuse clipped data, or re-fetch)
             if (Watches) Watches.reAdd(map); // re-add the watch layers (data is still in memory)
+            if (Warnings) Warnings.reAdd(map); // re-add the warning polygons (above the watches)
             if (window.RadarLayer) window.RadarLayer.reAdd(map);
         });
     };
@@ -60,6 +61,14 @@ try {
     window.setWatchSource = function (url) { if (Watches) Watches.setSource(map, url); };
     window.setWatchesVisible = function (on) { if (Watches) Watches.setVisible(map, on); };
     window.setWatchesOpacity = function (o) { if (Watches) Watches.setOpacity(map, o); };
+
+    // Storm-based warning polygons live in warnings.js — same lazy-load/delegate pattern as watches.
+    // Warnings sit ABOVE the watch boxes (imminent-threat layer). applyStyle calls Warnings.reAdd(map).
+    var Warnings = null;
+    import('./warnings.js').then(function (m) { Warnings = m; }).catch(function (e) { console.error('warnings.js load failed: ' + e); });
+    window.setWarningSource = function (url) { if (Warnings) Warnings.setSource(map, url); };
+    window.setWarningsVisible = function (on) { if (Warnings) Warnings.setVisible(map, on); };
+    window.setWarningsOpacity = function (o) { if (Warnings) Warnings.setOpacity(map, o); };
 
     window.flyTo = function (lng, lat, zoom) { map.flyTo({ center: [lng, lat], zoom: zoom }); };
 

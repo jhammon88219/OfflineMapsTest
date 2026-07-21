@@ -1,12 +1,11 @@
 using System;
 using System.Collections.Generic;
-using System.ComponentModel;
 using System.Linq;
-using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Anvil.Models;
 using Anvil.Services;
+using CommunityToolkit.Mvvm.ComponentModel;
 
 namespace Anvil.ViewModels
 {
@@ -20,7 +19,7 @@ namespace Anvil.ViewModels
 	/// and map markers + user location. The radar subsystem lives in <see cref="Radar"/>
 	/// (<see cref="RadarViewModel"/>). Drives the map through <see cref="IMapService"/>.
 	/// </summary>
-	public sealed class MapViewModel : INotifyPropertyChanged
+	public sealed class MapViewModel : ObservableObject
 	{
 		private readonly IMapService _mapService;
 		private readonly IStyleProvider _styleProvider;
@@ -37,7 +36,7 @@ namespace Anvil.ViewModels
 		private MapRegion? _mainRegion;
 
 
-		public MapViewModel(IMapService mapService, IStyleProvider styleProvider, IRegionProvider regionProvider, ISpcOutlookService spcOutlookService, ISpcWatchService watchService, IRadarSiteProvider radarSiteProvider, ILevel2RadarService radarService, ILocationService locationService, IDowEventProvider dowEventProvider, IDispatcher dispatcher)
+		public MapViewModel(IMapService mapService, IStyleProvider styleProvider, IRegionProvider regionProvider, ISpcOutlookService spcOutlookService, ISpcWatchService watchService, IWarningService warningService, IRadarSiteProvider radarSiteProvider, ILevel2RadarService radarService, ILocationService locationService, IDowEventProvider dowEventProvider, IDispatcher dispatcher)
 		{
 			_mapService = mapService;
 			_styleProvider = styleProvider;
@@ -49,6 +48,7 @@ namespace Anvil.ViewModels
 			Outlook = new OutlookViewModel(mapService, spcOutlookService, dispatcher);
 			PastOutlook = new PastOutlookViewModel(mapService, spcOutlookService, Radar);
 			Watches = new WatchesViewModel(mapService, watchService, dispatcher);
+			Warnings = new WarningsViewModel(mapService, warningService, dispatcher);
 			Markers = new MarkersViewModel(mapService, locationService);
 			SiteExplorer = new RadarSiteExplorerViewModel(Radar, Markers, radarService, mapService);
 
@@ -121,6 +121,11 @@ namespace Anvil.ViewModels
 		/// current-conditions alerts surfaced under NowCast, with their own toggle + refresh loop).</summary>
 		public WatchesViewModel Watches { get; }
 
+		/// <summary>The storm-based warning subsystem view model (active Tornado / Severe Thunderstorm
+		/// Warnings — the modern forecaster-drawn polygons — surfaced under NowCast with their own toggle
+		/// + faster refresh loop; sits above the watch boxes on the map).</summary>
+		public WarningsViewModel Warnings { get; }
+
 		/// <summary>The map markers + user-location subsystem view model (locate action + marker editor).</summary>
 		public MarkersViewModel Markers { get; }
 
@@ -172,9 +177,7 @@ namespace Anvil.ViewModels
 			get => _isNowCast;
 			set
 			{
-				if (_isNowCast == value) { return; }
-				_isNowCast = value;
-				OnPropertyChanged();
+				if (!SetProperty(ref _isNowCast, value)) { return; }
 				if (value)
 				{
 					if (Radar.IsPastEventMode) { Radar.IsPastEventMode = false; } // leave replay for live mode
@@ -221,16 +224,12 @@ namespace Anvil.ViewModels
 			get => _openCard;
 			set
 			{
-				if (_openCard == value)
+				if (SetProperty(ref _openCard, value))
 				{
-					return;
+					OnPropertyChanged(nameof(IsPastCardOpen));
+					OnPropertyChanged(nameof(IsNowCardOpen));
+					OnPropertyChanged(nameof(IsForeCardOpen));
 				}
-
-				_openCard = value;
-				OnPropertyChanged();
-				OnPropertyChanged(nameof(IsPastCardOpen));
-				OnPropertyChanged(nameof(IsNowCardOpen));
-				OnPropertyChanged(nameof(IsForeCardOpen));
 			}
 		}
 
@@ -268,16 +267,7 @@ namespace Anvil.ViewModels
 		public bool IsSettingsCardOpen
 		{
 			get => _isSettingsCardOpen;
-			set
-			{
-				if (_isSettingsCardOpen == value)
-				{
-					return;
-				}
-
-				_isSettingsCardOpen = value;
-				OnPropertyChanged();
-			}
+			set => SetProperty(ref _isSettingsCardOpen, value);
 		}
 
 		// The Radar Site Explorer's open state — app-wide like IsSettingsCardOpen and deliberately
@@ -288,16 +278,7 @@ namespace Anvil.ViewModels
 		public bool IsSiteExplorerOpen
 		{
 			get => _isSiteExplorerOpen;
-			set
-			{
-				if (_isSiteExplorerOpen == value)
-				{
-					return;
-				}
-
-				_isSiteExplorerOpen = value;
-				OnPropertyChanged();
-			}
+			set => SetProperty(ref _isSiteExplorerOpen, value);
 		}
 
 		public IReadOnlyList<MapStyle> AvailableStyles { get; }
@@ -356,15 +337,9 @@ namespace Anvil.ViewModels
 			Markers.SetMapReady();
 			await Outlook.OnMapsReadyAsync();
 			await Watches.OnMapsReadyAsync();
+			await Warnings.OnMapsReadyAsync();
 			await Radar.OnMapsReadyAsync();
 			await PastOutlook.OnMapsReadyAsync();
-		}
-
-		public event PropertyChangedEventHandler? PropertyChanged;
-
-		private void OnPropertyChanged([CallerMemberName] string? propertyName = null)
-		{
-			PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
 		}
 	}
 }

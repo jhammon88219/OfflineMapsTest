@@ -1,16 +1,15 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
-using System.ComponentModel;
 using System.Globalization;
 using System.Linq;
-using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Anvil.Models;
 using Anvil.Services;
+using CommunityToolkit.Mvvm.ComponentModel;
 
 namespace Anvil.ViewModels
 {
@@ -35,7 +34,7 @@ namespace Anvil.ViewModels
 	/// Threading: <see cref="StartAsync"/> is invoked from the UI thread and never uses
 	/// ConfigureAwait(false), so awaits resume on the UI thread — required, as it updates bound props.
 	/// </summary>
-	public sealed class RadarValidationViewModel : INotifyPropertyChanged
+	public sealed class RadarValidationViewModel : ObservableObject
 	{
 		private const int PollIntervalMs = 400;
 
@@ -57,7 +56,7 @@ namespace Anvil.ViewModels
 			get => _isRunning;
 			private set
 			{
-				if (SetField(ref _isRunning, value))
+				if (SetProperty(ref _isRunning, value))
 				{
 					OnPropertyChanged(nameof(IsIdle));
 				}
@@ -70,7 +69,7 @@ namespace Anvil.ViewModels
 		public string StatusText
 		{
 			get => _statusText;
-			private set => SetField(ref _statusText, value);
+			private set => SetProperty(ref _statusText, value);
 		}
 
 		/// <summary>Per-volume results, rebuilt live from the WebView's progress as the run proceeds.</summary>
@@ -83,7 +82,7 @@ namespace Anvil.ViewModels
 			get => _lastReport;
 			private set
 			{
-				if (SetField(ref _lastReport, value))
+				if (SetProperty(ref _lastReport, value))
 				{
 					OnPropertyChanged(nameof(HasReport));
 				}
@@ -252,16 +251,6 @@ namespace Anvil.ViewModels
 			public string? Error { get; set; }
 		}
 
-		public event PropertyChangedEventHandler? PropertyChanged;
-		private void OnPropertyChanged([CallerMemberName] string? name = null) =>
-			PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
-		private bool SetField<T>(ref T field, T value, [CallerMemberName] string? name = null)
-		{
-			if (EqualityComparer<T>.Default.Equals(field, value)) return false;
-			field = value;
-			OnPropertyChanged(name);
-			return true;
-		}
 	}
 
 	/// <summary>How one corpus volume scored against its baseline.</summary>

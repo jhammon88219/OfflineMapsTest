@@ -1,10 +1,9 @@
 using System;
 using System.Collections.Generic;
-using System.ComponentModel;
-using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using Anvil.Models;
 using Anvil.Services;
+using CommunityToolkit.Mvvm.ComponentModel;
 
 namespace Anvil.ViewModels
 {
@@ -14,7 +13,7 @@ namespace Anvil.ViewModels
 	/// site machinery (see tools/dow_import.py). Extracted from RadarViewModel and owned by it, so the
 	/// shared radar-display / color-scale gate can react to <see cref="IsShowing"/>.
 	/// </summary>
-	public sealed class DowViewModel : INotifyPropertyChanged
+	public sealed class DowViewModel : ObservableObject
 	{
 		private readonly IMapService _mapService;
 		private readonly IDowEventProvider _dowEventProvider;
@@ -36,7 +35,7 @@ namespace Anvil.ViewModels
 		public bool IsShowing
 		{
 			get => _isShowing;
-			private set { if (_isShowing != value) { _isShowing = value; OnPropertyChanged(); } }
+			private set => SetProperty(ref _isShowing, value);
 		}
 
 		/// <summary>Called by RadarViewModel when a NEXRAD site selection takes over the radar layer.</summary>
@@ -55,7 +54,7 @@ namespace Anvil.ViewModels
 			set
 			{
 				var c = DowEvents.Count == 0 ? 0 : Math.Clamp(value, 0, DowEvents.Count - 1);
-				if (_dowEventIndex != c) { _dowEventIndex = c; OnPropertyChanged(); }
+				SetProperty(ref _dowEventIndex, c);
 			}
 		}
 
@@ -66,10 +65,10 @@ namespace Anvil.ViewModels
 			set
 			{
 				var c = Math.Clamp(value, 0, 1);
-				if (_dowProductIndex == c) return;
-				_dowProductIndex = c;
-				OnPropertyChanged();
-				_ = _mapService.SetRadarProductAsync(c == 1 ? "velocity" : "reflectivity");
+				if (SetProperty(ref _dowProductIndex, c))
+				{
+					_ = _mapService.SetRadarProductAsync(c == 1 ? "velocity" : "reflectivity");
+				}
 			}
 		}
 
@@ -80,7 +79,7 @@ namespace Anvil.ViewModels
 		public string DowStatus
 		{
 			get => _dowStatus;
-			private set { if (_dowStatus != value) { _dowStatus = value; OnPropertyChanged(); } }
+			private set => SetProperty(ref _dowStatus, value);
 		}
 
 		/// <summary>Loads + shows the selected DOW frame (decoded in the WebView via the radar pipeline).</summary>
@@ -113,13 +112,6 @@ namespace Anvil.ViewModels
 			await _mapService.ClearDowFrameAsync();
 			IsShowing = false;
 			DowStatus = string.Empty;
-		}
-
-		public event PropertyChangedEventHandler? PropertyChanged;
-
-		private void OnPropertyChanged([CallerMemberName] string? propertyName = null)
-		{
-			PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
 		}
 	}
 }

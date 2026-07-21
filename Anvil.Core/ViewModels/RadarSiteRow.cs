@@ -1,6 +1,5 @@
-using System.ComponentModel;
-using System.Runtime.CompilerServices;
 using Anvil.Models;
+using CommunityToolkit.Mvvm.ComponentModel;
 
 namespace Anvil.ViewModels
 {
@@ -12,7 +11,7 @@ namespace Anvil.ViewModels
 	/// so down rows aren't clickable. (Selection itself is the ListView's own SelectedItem state —
 	/// the row only carries what selection can't express.)
 	/// </summary>
-	public sealed class RadarSiteRow : INotifyPropertyChanged
+	public sealed class RadarSiteRow : ObservableObject
 	{
 		public RadarSiteRow(RadarSite site) => Site = site;
 
@@ -42,20 +41,15 @@ namespace Anvil.ViewModels
 			get => _isOffline;
 			set
 			{
-				if (_isOffline == value) return;
-				_isOffline = value;
-				OnPropertyChanged();
-				OnPropertyChanged(nameof(IsAvailable));
-				OnPropertyChanged(nameof(StatusLabel));
+				if (SetProperty(ref _isOffline, value))
+				{
+					OnPropertyChanged(nameof(IsAvailable));
+					OnPropertyChanged(nameof(StatusLabel));
+				}
 			}
 		}
 
 		/// <summary>Inverse of <see cref="IsOffline"/>; bound to the row's IsEnabled (down = not clickable).</summary>
 		public bool IsAvailable => !_isOffline;
-
-		public event PropertyChangedEventHandler? PropertyChanged;
-
-		private void OnPropertyChanged([CallerMemberName] string? name = null) =>
-			PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 	}
 }

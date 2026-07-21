@@ -41,6 +41,16 @@ namespace Anvil.Services
 		public Task SetWatchesOpacityAsync(double opacity) =>
 			_mapView.RunScriptAsync(Call("setWatchesOpacity", opacity));
 
+		// Storm-based warning polygons: point the page at the cached warning GeoJSON, and toggle the layers.
+		public Task SetWarningSourceAsync(string url) =>
+			_mapView.RunScriptAsync(Call("setWarningSource", url));
+
+		public Task SetWarningsVisibleAsync(bool visible) =>
+			_mapView.RunScriptAsync(Call("setWarningsVisible", visible));
+
+		public Task SetWarningsOpacityAsync(double opacity) =>
+			_mapView.RunScriptAsync(Call("setWarningsOpacity", opacity));
+
 		// The loop is driven frame-by-frame: begin (with the site's antenna coords, needed to
 		// project the gates), then add each cached volume URL as a frame, then show by index.
 		public Task BeginRadarLoopAsync(RadarSite site) =>

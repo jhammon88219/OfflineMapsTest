@@ -17,6 +17,10 @@ namespace Anvil.Controls.Sections
 			InitializeComponent();
 		}
 
+		/// <summary>x:Bind formatter for the per-type active-warning counts (int → display string). Used by
+		/// the "Active" readout; re-evaluates when the bound count property raises PropertyChanged.</summary>
+		public string Fmt(int count) => count.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
 		/// <summary>The coordinator view model; bound from the host.</summary>
 		public MapViewModel ViewModel
 		{

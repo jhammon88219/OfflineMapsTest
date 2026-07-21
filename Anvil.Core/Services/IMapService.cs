@@ -89,6 +89,22 @@ namespace Anvil.Services
 		/// </summary>
 		Task SetWatchesOpacityAsync(double opacity);
 
+		/// <summary>
+		/// Tells the page where to load the cached storm-based warning GeoJSON from. The page fetches it
+		/// lazily (only when warnings are shown) and re-fetches on each refresh push.
+		/// </summary>
+		Task SetWarningSourceAsync(string url);
+
+		/// <summary>Shows or hides the storm-based warning polygons (Tornado / Severe Thunderstorm
+		/// Warnings). These sit above the watch boxes.</summary>
+		Task SetWarningsVisibleAsync(bool visible);
+
+		/// <summary>
+		/// Sets the overall opacity (0-1) of the warning polygons. Scales both the faint fill and the bold
+		/// outline together, so the slider fades the whole overlay (1 = the default look).
+		/// </summary>
+		Task SetWarningsOpacityAsync(double opacity);
+
 		/// <summary>Highlights the selected site marker (empty clears the highlight).</summary>
 		Task SetSelectedRadarSiteAsync(string? siteId);
 

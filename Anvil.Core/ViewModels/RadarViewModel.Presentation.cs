@@ -258,14 +258,10 @@ namespace Anvil.ViewModels
 			get => _isPlaying;
 			private set
 			{
-				if (_isPlaying == value)
+				if (SetProperty(ref _isPlaying, value))
 				{
-					return;
+					OnPropertyChanged(nameof(PlayPauseGlyph));
 				}
-
-				_isPlaying = value;
-				OnPropertyChanged();
-				OnPropertyChanged(nameof(PlayPauseGlyph));
 			}
 		}
 	}

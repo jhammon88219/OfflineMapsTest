@@ -1,13 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
-using System.ComponentModel;
 using System.Linq;
-using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Anvil.Models;
 using Anvil.Services;
+using CommunityToolkit.Mvvm.ComponentModel;
 
 namespace Anvil.ViewModels
 {
@@ -30,7 +29,7 @@ namespace Anvil.ViewModels
 	/// color-scale legend, and the inspector. Extracted from MapViewModel; the transport-bar
 	/// section controls bind slices of this. Drives the map through <see cref="IMapService"/>.
 	/// </summary>
-	public sealed partial class RadarViewModel : INotifyPropertyChanged
+	public sealed partial class RadarViewModel : ObservableObject
 	{
 		private readonly IMapService _mapService;
 		private readonly IRadarSiteProvider _radarSiteProvider;
@@ -231,13 +230,11 @@ namespace Anvil.ViewModels
 			get => _selectedRadarOption;
 			set
 			{
-				if (_selectedRadarOption == value)
+				if (!SetProperty(ref _selectedRadarOption, value))
 				{
 					return;
 				}
 
-				_selectedRadarOption = value;
-				OnPropertyChanged();
 				// Mirror the selection to the dock list (so a map-marker pick highlights its row).
 				// Guarded so the list's own setter doesn't bounce back into a re-select.
 				_syncingSelection = true;
@@ -308,21 +305,21 @@ namespace Anvil.ViewModels
 		public int PastEventYearIndex
 		{
 			get => _pastEventYearIndex;
-			set { var c = Math.Clamp(value, 0, PastEventYearOptions.Count - 1); if (_pastEventYearIndex != c) { _pastEventYearIndex = c; OnPropertyChanged(); } }
+			set { var c = Math.Clamp(value, 0, PastEventYearOptions.Count - 1); SetProperty(ref _pastEventYearIndex, c); }
 		}
 
 		/// <summary>Selected month index (0-11).</summary>
 		public int PastEventMonthIndex
 		{
 			get => _pastEventMonthIndex;
-			set { var c = Math.Clamp(value, 0, 11); if (_pastEventMonthIndex != c) { _pastEventMonthIndex = c; OnPropertyChanged(); } }
+			set { var c = Math.Clamp(value, 0, 11); SetProperty(ref _pastEventMonthIndex, c); }
 		}
 
 		/// <summary>Selected day index (0-30).</summary>
 		public int PastEventDayIndex
 		{
 			get => _pastEventDayIndex;
-			set { var c = Math.Clamp(value, 0, 30); if (_pastEventDayIndex != c) { _pastEventDayIndex = c; OnPropertyChanged(); } }
+			set { var c = Math.Clamp(value, 0, 30); SetProperty(ref _pastEventDayIndex, c); }
 		}
 
 		// Once a replay window has been loaded (Load pressed with data found), the window is "armed":
@@ -339,14 +336,12 @@ namespace Anvil.ViewModels
 			get => _isPastEventMode;
 			set
 			{
-				if (_isPastEventMode == value)
+				if (!SetProperty(ref _isPastEventMode, value))
 				{
 					return;
 				}
 
-				_isPastEventMode = value;
 				_pastWindowLoaded = false; // re-arm from scratch each time the mode is toggled
-				OnPropertyChanged();
 				OnPropertyChanged(nameof(IsLiveControlsEnabled));
 				// The offered tilts depend on the mode, not just the radar: a live loop shows only the
 				// tilts the chunks feed can serve fresh, while replay (all-historical) offers the whole
@@ -373,7 +368,7 @@ namespace Anvil.ViewModels
 		public TimeSpan PastEventTime
 		{
 			get => _pastEventTime;
-			set { if (_pastEventTime != value) { _pastEventTime = value; OnPropertyChanged(); } }
+			set => SetProperty(ref _pastEventTime, value);
 		}
 
 		/// <summary>Selected window-duration index (into <see cref="PastEventDurationOptions"/>).</summary>
@@ -383,9 +378,7 @@ namespace Anvil.ViewModels
 			set
 			{
 				var clamped = Math.Clamp(value, 0, PastEventMinutesByIndex.Length - 1);
-				if (_pastEventDurationIndex == clamped) return;
-				_pastEventDurationIndex = clamped;
-				OnPropertyChanged();
+				SetProperty(ref _pastEventDurationIndex, clamped);
 			}
 		}
 
@@ -393,7 +386,7 @@ namespace Anvil.ViewModels
 		public string PastEventStatus
 		{
 			get => _pastEventStatus;
-			private set { if (_pastEventStatus != value) { _pastEventStatus = value; OnPropertyChanged(); } }
+			private set => SetProperty(ref _pastEventStatus, value);
 		}
 
 		// ── User-tunable loop settings (Radar Loop tool window). SelectedIndex-bound combos,
@@ -409,10 +402,10 @@ namespace Anvil.ViewModels
 			set
 			{
 				var clamped = Math.Clamp(value, 0, LoopLengthByIndex.Length - 1);
-				if (_loopLengthIndex == clamped) return;
-				_loopLengthIndex = clamped;
-				OnPropertyChanged();
-				if (_selectedRadarOption?.Site is { } site) _ = StartRadarLoopAsync(site);
+				if (SetProperty(ref _loopLengthIndex, clamped) && _selectedRadarOption?.Site is { } site)
+				{
+					_ = StartRadarLoopAsync(site);
+				}
 			}
 		}
 
@@ -426,9 +419,7 @@ namespace Anvil.ViewModels
 			set
 			{
 				var clamped = Math.Clamp(value, 0, RefreshSecondsByIndex.Length - 1);
-				if (_refreshIntervalIndex == clamped) return;
-				_refreshIntervalIndex = clamped;
-				OnPropertyChanged();
+				SetProperty(ref _refreshIntervalIndex, clamped);
 			}
 		}
 
@@ -442,9 +433,7 @@ namespace Anvil.ViewModels
 			set
 			{
 				var clamped = Math.Clamp(value, 0, PlaybackMsByIndex.Length - 1);
-				if (_playbackSpeedIndex == clamped) return;
-				_playbackSpeedIndex = clamped;
-				OnPropertyChanged();
+				SetProperty(ref _playbackSpeedIndex, clamped);
 			}
 		}
 
@@ -461,9 +450,7 @@ namespace Anvil.ViewModels
 			get => _selectedSiteRow;
 			set
 			{
-				if (ReferenceEquals(_selectedSiteRow, value)) return;
-				_selectedSiteRow = value;
-				OnPropertyChanged();
+				if (!SetProperty(ref _selectedSiteRow, value)) return;
 				if (_syncingSelection) return; // pushed from SelectedRadarOption — don't re-activate
 				// The list drove this: select the matching option (a plain select, not a toggle).
 				SelectedRadarOption = value is null
@@ -478,13 +465,11 @@ namespace Anvil.ViewModels
 			get => _isLoopReady;
 			private set
 			{
-				if (_isLoopReady == value)
+				if (!SetProperty(ref _isLoopReady, value))
 				{
 					return;
 				}
 
-				_isLoopReady = value;
-				OnPropertyChanged();
 				OnPropertyChanged(nameof(RadarLoadingText));
 
 				// Reflectivity has finished rendering: speculatively build Velocity in the background so a
@@ -509,13 +494,11 @@ namespace Anvil.ViewModels
 			set
 			{
 				var clamped = (int)Math.Round(value < 0 ? 0 : (value > MaxFrameIndex ? MaxFrameIndex : value));
-				if (_currentFrameIndex == clamped)
+				if (!SetProperty(ref _currentFrameIndex, clamped))
 				{
 					return;
 				}
 
-				_currentFrameIndex = clamped;
-				OnPropertyChanged();
 				OnPropertyChanged(nameof(CurrentFrameTimeText));
 				// Refresh the card readouts (frame N/M, time) NOW rather than waiting for the 1s tick —
 				// otherwise at fast playback (≤500ms/frame) the "frame N/M" line only updates every
@@ -552,12 +535,8 @@ namespace Anvil.ViewModels
 		/// <summary>Whether the Stop button is enabled (the loop is playing or paused, not stopped).</summary>
 		public bool CanStopLoop => _loopEngaged;
 
-		private void SetLoopEngaged(bool value)
-		{
-			if (_loopEngaged == value) return;
-			_loopEngaged = value;
-			OnPropertyChanged(nameof(CanStopLoop));
-		}
+		private void SetLoopEngaged(bool value) =>
+			SetProperty(ref _loopEngaged, value, nameof(CanStopLoop));
 
 		/// <summary>Toggles loop playback (no-op until the loop is fully loaded). Pressing play OR
 		/// pause engages the loop, so Stop becomes available (and stays available while paused).</summary>
@@ -606,15 +585,7 @@ namespace Anvil.ViewModels
 			get => _radarOpacity;
 			set
 			{
-				if (_radarOpacity == value)
-				{
-					return;
-				}
-
-				_radarOpacity = value;
-				OnPropertyChanged();
-
-				if (_isMapReady)
+				if (SetProperty(ref _radarOpacity, value) && _isMapReady)
 				{
 					_ = _mapService.SetRadarOpacityAsync(value);
 				}
@@ -659,13 +630,10 @@ namespace Anvil.ViewModels
 			get => _radarProductIndex;
 			set
 			{
-				if (_radarProductIndex == value)
+				if (!SetProperty(ref _radarProductIndex, value))
 				{
 					return;
 				}
-
-				_radarProductIndex = value;
-				OnPropertyChanged();
 
 				// Re-derive the scrubber cells for the newly-active product. We deliberately do NOT blank
 				// the velocity-ready set here: radar.js posts fresh build progress synchronously from
@@ -728,14 +696,12 @@ namespace Anvil.ViewModels
 			get => _radarTiltIndex;
 			set
 			{
-				if (_radarTiltIndex == value || value < 0 || value >= RadarTiltOptions.Count)
+				if (value < 0 || value >= RadarTiltOptions.Count || !SetProperty(ref _radarTiltIndex, value))
 				{
 					return;
 				}
 
-				_radarTiltIndex = value;
 				_selectedTiltAngle = RadarTiltOptions[value].Angle;
-				OnPropertyChanged();
 				OnPropertyChanged(nameof(SelectedTiltLabel));
 				ReloadForTiltChange();
 			}
@@ -826,13 +792,11 @@ namespace Anvil.ViewModels
 			get => _radarSitesVisible;
 			set
 			{
-				if (_radarSitesVisible == value)
+				if (!SetProperty(ref _radarSitesVisible, value))
 				{
 					return;
 				}
 
-				_radarSitesVisible = value;
-				OnPropertyChanged();
 				OnPropertyChanged(nameof(RadarSitesToggleLabel));
 
 				if (_isMapReady)
@@ -859,15 +823,7 @@ namespace Anvil.ViewModels
 			get => _showResearchRadars;
 			set
 			{
-				if (_showResearchRadars == value)
-				{
-					return;
-				}
-
-				_showResearchRadars = value;
-				OnPropertyChanged();
-
-				if (_isMapReady)
+				if (SetProperty(ref _showResearchRadars, value) && _isMapReady)
 				{
 					_ = _mapService.SetResearchRadarsVisibleAsync(value);
 				}
@@ -885,15 +841,7 @@ namespace Anvil.ViewModels
 			get => _showTdwrs;
 			set
 			{
-				if (_showTdwrs == value)
-				{
-					return;
-				}
-
-				_showTdwrs = value;
-				OnPropertyChanged();
-
-				if (_isMapReady)
+				if (SetProperty(ref _showTdwrs, value) && _isMapReady)
 				{
 					_ = _mapService.SetTdwrsVisibleAsync(value);
 				}
@@ -1008,13 +956,6 @@ namespace Anvil.ViewModels
 			{
 				// ignore
 			}
-		}
-
-		public event PropertyChangedEventHandler? PropertyChanged;
-
-		private void OnPropertyChanged([CallerMemberName] string? propertyName = null)
-		{
-			PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
 		}
 	}
 }

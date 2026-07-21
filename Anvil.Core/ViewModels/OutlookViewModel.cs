@@ -1,12 +1,11 @@
 using System;
 using System.Collections.Generic;
-using System.ComponentModel;
 using System.Linq;
-using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Anvil.Models;
 using Anvil.Services;
+using CommunityToolkit.Mvvm.ComponentModel;
 
 namespace Anvil.ViewModels
 {
@@ -17,7 +16,7 @@ namespace Anvil.ViewModels
 	/// <see cref="IMapService"/>. (SPC watch boxes are a separate subsystem — see
 	/// <see cref="WatchesViewModel"/> — since they're current-conditions alerts, not a forecast.)
 	/// </summary>
-	public sealed class OutlookViewModel : INotifyPropertyChanged
+	public sealed class OutlookViewModel : ObservableObject
 	{
 		private readonly IMapService _mapService;
 		private readonly ISpcOutlookService _spcOutlookService;
@@ -125,14 +124,13 @@ namespace Anvil.ViewModels
 			get => _selectedDayOption;
 			set
 			{
-				if (_selectedDayOption == value || value is null)
+				if (value is null || _selectedDayOption == value)
 				{
 					return;
 				}
 
-				_selectedDayOption = value;
 				_selectedDay = value.Day;
-				OnPropertyChanged();
+				SetProperty(ref _selectedDayOption, value);
 
 				// Rebuild the option list, then re-select an option for the new day.
 				// Suppress overlay updates during the swap (the product combobox briefly
@@ -161,18 +159,14 @@ namespace Anvil.ViewModels
 			get => _selectedOption;
 			set
 			{
-				if (_selectedOption == value)
+				if (SetProperty(ref _selectedOption, value))
 				{
-					return;
-				}
+					OnPropertyChanged(nameof(SelectedProduct));
 
-				_selectedOption = value;
-				OnPropertyChanged();
-				OnPropertyChanged(nameof(SelectedProduct));
-
-				if (!_suppressOutlookUpdate)
-				{
-					ApplyCurrentOutlook();
+					if (!_suppressOutlookUpdate)
+					{
+						ApplyCurrentOutlook();
+					}
 				}
 			}
 		}
@@ -191,14 +185,10 @@ namespace Anvil.ViewModels
 			get => _isOutlookVisible;
 			set
 			{
-				if (_isOutlookVisible == value)
+				if (SetProperty(ref _isOutlookVisible, value))
 				{
-					return;
+					ApplyCurrentOutlook();
 				}
-
-				_isOutlookVisible = value;
-				OnPropertyChanged();
-				ApplyCurrentOutlook();
 			}
 		}
 
@@ -212,14 +202,10 @@ namespace Anvil.ViewModels
 			get => _outlookTimesText;
 			private set
 			{
-				if (_outlookTimesText == value)
+				if (SetProperty(ref _outlookTimesText, value))
 				{
-					return;
+					OnPropertyChanged(nameof(HasOutlookTimes));
 				}
-
-				_outlookTimesText = value;
-				OnPropertyChanged();
-				OnPropertyChanged(nameof(HasOutlookTimes));
 			}
 		}
 
@@ -252,15 +238,7 @@ namespace Anvil.ViewModels
 		public string OutlookNarrativeText
 		{
 			get => _outlookNarrative;
-			private set
-			{
-				if (_outlookNarrative == value)
-				{
-					return;
-				}
-				_outlookNarrative = value;
-				OnPropertyChanged();
-			}
+			private set => SetProperty(ref _outlookNarrative, value);
 		}
 
 
@@ -302,15 +280,7 @@ namespace Anvil.ViewModels
 			get => _outlookOpacity;
 			set
 			{
-				if (_outlookOpacity == value)
-				{
-					return;
-				}
-
-				_outlookOpacity = value;
-				OnPropertyChanged();
-
-				if (_isMapReady)
+				if (SetProperty(ref _outlookOpacity, value) && _isMapReady)
 				{
 					_ = _mapService.SetOutlookOpacityAsync(value);
 				}
@@ -485,13 +455,6 @@ namespace Anvil.ViewModels
 
 			// Drive the SPC outlook next-update progress bar.
 			_ = RunProgressTickAsync();
-		}
-
-		public event PropertyChangedEventHandler? PropertyChanged;
-
-		private void OnPropertyChanged([CallerMemberName] string? propertyName = null)
-		{
-			PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
 		}
 	}
 }

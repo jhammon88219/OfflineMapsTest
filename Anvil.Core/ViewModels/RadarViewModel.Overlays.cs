@@ -61,13 +61,11 @@ namespace Anvil.ViewModels
 			get => _isInspecting;
 			set
 			{
-				if (_isInspecting == value)
+				if (!SetProperty(ref _isInspecting, value))
 				{
 					return;
 				}
 
-				_isInspecting = value;
-				OnPropertyChanged();
 				if (!value)
 				{
 					SetInspectValue(null); // clear the marker when leaving inspect

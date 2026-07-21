@@ -1,8 +1,7 @@
 using System;
-using System.ComponentModel;
-using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using Anvil.Services;
+using CommunityToolkit.Mvvm.ComponentModel;
 
 namespace Anvil.ViewModels
 {
@@ -13,7 +12,7 @@ namespace Anvil.ViewModels
 	/// the ~2-min background refresh loop, and the map pushes. Fetch/cache is in
 	/// <see cref="ISpcWatchService"/>; the map is driven through <see cref="IMapService"/>.
 	/// </summary>
-	public sealed class WatchesViewModel : INotifyPropertyChanged
+	public sealed class WatchesViewModel : ObservableObject
 	{
 		private readonly IMapService _mapService;
 		private readonly ISpcWatchService _watchService;
@@ -43,14 +42,7 @@ namespace Anvil.ViewModels
 			get => _showWatches;
 			set
 			{
-				if (_showWatches == value)
-				{
-					return;
-				}
-
-				_showWatches = value;
-				OnPropertyChanged();
-				if (_isMapReady)
+				if (SetProperty(ref _showWatches, value) && _isMapReady)
 				{
 					_ = _mapService.SetWatchesVisibleAsync(value);
 				}
@@ -64,14 +56,7 @@ namespace Anvil.ViewModels
 			get => _watchesOpacity;
 			set
 			{
-				if (_watchesOpacity == value)
-				{
-					return;
-				}
-
-				_watchesOpacity = value;
-				OnPropertyChanged();
-				if (_isMapReady)
+				if (SetProperty(ref _watchesOpacity, value) && _isMapReady)
 				{
 					_ = _mapService.SetWatchesOpacityAsync(value);
 				}
@@ -126,10 +111,5 @@ namespace Anvil.ViewModels
 				_ = _mapService.SetWatchSourceAsync(_watchService.WatchesUrl);
 			}
 		}
-
-		public event PropertyChangedEventHandler? PropertyChanged;
-
-		private void OnPropertyChanged([CallerMemberName] string? propertyName = null) =>
-			PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
 	}
 }

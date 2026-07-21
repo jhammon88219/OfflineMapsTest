@@ -477,11 +477,13 @@
         };
     }
 
-    // Beneath the watch boxes, the boundary lines (so borders draw over radar), the outlook, and the
-    // labels. Watches sit under the boundaries too, so target them FIRST — otherwise whichever of the
-    // two was added last (a site click vs the ~2-min watch refresh) would land on top.
+    // Beneath the watch boxes, the warning polygons, the boundary lines (so borders draw over radar),
+    // the outlook, and the labels. Watches are the LOWEST of those overlays (warnings sit above them),
+    // so target watches FIRST, then warnings — otherwise whichever was added last (a site click vs the
+    // periodic watch/warning refresh) would land on top of radar.
     function beforeId(map) {
         if (map.getLayer('spc-watch-fill')) return 'spc-watch-fill';
+        if (map.getLayer('nws-warning-fill')) return 'nws-warning-fill';
         if (map.getLayer('boundaries_country')) return 'boundaries_country';
         if (map.getLayer('boundaries')) return 'boundaries';
         if (map.getLayer('spc-outlook-fill')) return 'spc-outlook-fill';

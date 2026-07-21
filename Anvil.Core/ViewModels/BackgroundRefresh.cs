@@ -27,5 +27,25 @@ namespace Anvil.ViewModels
 			}
 			while (await timer.WaitForNextTickAsync());
 		}
+
+		/// <summary>
+		/// Like <see cref="RunPeriodicAsync"/>, but the cadence is DYNAMIC: <paramref name="work"/> returns
+		/// the delay to wait before the next cycle, so it can speed up or slow down based on what it just
+		/// found (e.g. poll faster while warnings are active). Runs once immediately (<c>first</c> = true),
+		/// then waits the returned delay and repeats for the app's life. The caller owns its try/catch so
+		/// one bad cycle can't kill the loop; a returned delay is clamped to a small floor so a bug can't
+		/// spin the loop hot.
+		/// </summary>
+		public static async Task RunAdaptiveAsync(Func<bool, Task<TimeSpan>> work)
+		{
+			var first = true;
+			while (true)
+			{
+				var next = await work(first);
+				first = false;
+				if (next < TimeSpan.FromSeconds(1)) { next = TimeSpan.FromSeconds(1); }
+				await Task.Delay(next);
+			}
+		}
 	}
 }

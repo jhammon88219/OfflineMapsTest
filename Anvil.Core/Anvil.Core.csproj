@@ -19,6 +19,8 @@
   <ItemGroup>
     <!-- bzip2 for the Level II volume decompression (Level2Format / Level2RadarService). -->
     <PackageReference Include="SharpCompress" Version="1.0.0" />
+    <!-- ObservableObject base for the view-models (INotifyPropertyChanged plumbing + SetProperty). -->
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
   </ItemGroup>
 
   <ItemGroup>

@@ -1,12 +1,11 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
-using System.ComponentModel;
 using System.Linq;
-using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using Anvil.Models;
 using Anvil.Services;
+using CommunityToolkit.Mvvm.ComponentModel;
 
 namespace Anvil.ViewModels
 {
@@ -26,7 +25,7 @@ namespace Anvil.ViewModels
 	/// site's latest-scan time and VCP/scan mode on demand via
 	/// <see cref="ILevel2RadarService.GetLatestScanAsync"/>.
 	/// </summary>
-	public sealed class RadarSiteExplorerViewModel : INotifyPropertyChanged
+	public sealed class RadarSiteExplorerViewModel : ObservableObject
 	{
 		private readonly RadarViewModel _radar;
 		private readonly MarkersViewModel _markers;
@@ -68,10 +67,10 @@ namespace Anvil.ViewModels
 			get => _searchText;
 			set
 			{
-				if (_searchText == value) return;
-				_searchText = value ?? string.Empty;
-				OnPropertyChanged();
-				RebuildFiltered();
+				if (SetProperty(ref _searchText, value ?? string.Empty))
+				{
+					RebuildFiltered();
+				}
 			}
 		}
 
@@ -83,10 +82,10 @@ namespace Anvil.ViewModels
 			get => _selectedClassIndex;
 			set
 			{
-				if (_selectedClassIndex == value) return;
-				_selectedClassIndex = value;
-				OnPropertyChanged();
-				RebuildFiltered();
+				if (SetProperty(ref _selectedClassIndex, value))
+				{
+					RebuildFiltered();
+				}
 			}
 		}
 
@@ -98,10 +97,10 @@ namespace Anvil.ViewModels
 			get => _onlineOnly;
 			set
 			{
-				if (_onlineOnly == value) return;
-				_onlineOnly = value;
-				OnPropertyChanged();
-				RebuildFiltered();
+				if (SetProperty(ref _onlineOnly, value))
+				{
+					RebuildFiltered();
+				}
 			}
 		}
 
@@ -155,11 +154,11 @@ namespace Anvil.ViewModels
 			get => _selectedSite;
 			set
 			{
-				if (ReferenceEquals(_selectedSite, value)) return;
-				_selectedSite = value;
-				OnPropertyChanged();
-				RaiseDetail();
-				_ = LoadDetailAsync(value, ++_detailToken);
+				if (SetProperty(ref _selectedSite, value))
+				{
+					RaiseDetail();
+					_ = LoadDetailAsync(value, ++_detailToken);
+				}
 			}
 		}
 
@@ -199,7 +198,7 @@ namespace Anvil.ViewModels
 		public bool IsLoadingScanInfo
 		{
 			get => _isLoadingScanInfo;
-			private set { if (_isLoadingScanInfo != value) { _isLoadingScanInfo = value; OnPropertyChanged(); } }
+			private set => SetProperty(ref _isLoadingScanInfo, value);
 		}
 
 		/// <summary>Whether the selected site is the one the loop is currently showing.</summary>
@@ -350,10 +349,5 @@ namespace Anvil.ViewModels
 		}
 
 		private static double DegToRad(double deg) => deg * Math.PI / 180.0;
-
-		public event PropertyChangedEventHandler? PropertyChanged;
-
-		private void OnPropertyChanged([CallerMemberName] string? name = null) =>
-			PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 	}
 }
