@@ -240,20 +240,30 @@ let _dealiasInfo = '';
 // raw made 2*Nyquist ~5168, so round((ref-raw)/2Nyq) was always 0 and NOTHING ever unfolded
 // (velocity rendered raw/aliased: red where strong inbound should read bright green). Real m/s
 // Nyquists are < ~70, so normalize anything above 100 by /100.
-function nyquistForRadial(radar, i) {
+// `out` (optional {src}) reports which field the value came from: 'rad' = the RAD per-radial sub-block
+// (the CORRECT per-cut Nyquist Py-ART/RadarScope use), 'vol' = the coarser VOLUME-level fallback,
+// 'none' = unavailable. Selection is unchanged (RAD when present, else VOL) — this only OBSERVES it.
+function nyquistForRadial(radar, i, out) {
     try {
         const rec = radar.data[radar.elevation][i] && radar.data[radar.elevation][i].record;
-        if (!rec) return NaN;
+        if (!rec) { if (out) out.src = 'none'; return NaN; }
         // Message 31 (super-res) carries Nyquist in the RAD sub-block (cm/s); legacy Message 1 puts
         // it on the record itself, already in m/s (the decoder divides by 100 there). The >100 guard
         // below normalizes whichever path supplied cm/s, and leaves an already-m/s value alone.
-        let nv = (rec.radial && typeof rec.radial.nyquist_velocity === 'number')
-            ? rec.radial.nyquist_velocity
-            : rec.nyquist_velocity;
-        if (typeof nv !== 'number' || !(nv > 1)) return NaN;
+        // ⚠️ The RAD (per-radial) and VOL (volume-level) blocks can hold DIFFERENT Nyquists — using
+        // the VOL fallback (~2 m/s higher) corrupts the fold arithmetic and is the suspected cause of
+        // couplet mis-folds in the live path (`out.src` surfaces this to the diagnostics log).
+        let nv, src;
+        if (rec.radial && typeof rec.radial.nyquist_velocity === 'number') {
+            nv = rec.radial.nyquist_velocity; src = 'rad';
+        } else {
+            nv = rec.nyquist_velocity; src = 'vol';
+        }
+        if (typeof nv !== 'number' || !(nv > 1)) { if (out) out.src = 'none'; return NaN; }
         if (nv > 100) nv /= 100; // cm/s -> m/s
+        if (out) out.src = src;
         return nv;
-    } catch (e) { return NaN; }
+    } catch (e) { if (out) out.src = 'none'; return NaN; }
 }
 
 // The sweep's representative Nyquist (median of valid per-radial values), or NaN if none.
@@ -266,6 +276,25 @@ function sweepNyquist(radar, count) {
     if (!v.length) return NaN;
     v.sort(function (a, b) { return a - b; });
     return v[v.length >> 1];
+}
+
+// Instrumentation companion to sweepNyquist: the same median value PLUS which source it came from and
+// the median of each candidate (RAD per-radial vs VOL volume-level). A 'vol' src on a sweep means the
+// per-radial cut Nyquist was unavailable and the dealiaser fell back to the coarser volume value — the
+// suspected root of live-path couplet fold misses. Cheap; runs once per decoded velocity sweep.
+function sweepNyquistDetail(radar, count) {
+    const all = [], radV = [], volV = [];
+    let radN = 0, volN = 0;
+    const out = {};
+    for (let i = 0; i < count; i++) {
+        const v = nyquistForRadial(radar, i, out);
+        if (out.src === 'rad') { radN++; if (isFinite(v)) radV.push(v); }
+        else if (out.src === 'vol') { volN++; if (isFinite(v)) volV.push(v); }
+        if (isFinite(v)) all.push(v);
+    }
+    const med = function (a) { if (!a.length) return NaN; a = a.slice().sort(function (x, y) { return x - y; }); return a[a.length >> 1]; };
+    const src = radN && volN ? 'mixed' : radN ? 'rad' : volN ? 'vol' : 'none';
+    return { med: med(all), src: src, radMed: med(radV), volMed: med(volV), radN: radN, volN: volN };
 }
 
 // Region-based velocity DEALIASING (v2 — a port of Py-ART's region_based algorithm, a "dynamic
@@ -288,6 +317,8 @@ function sweepNyquist(radar, count) {
 //   4. CENTER: shift all fold counts so the gate-weighted mean fold is ~0 (the sweep's absolute anchor).
 // Input unchanged if no Nyquist is available.
 const INTERVAL_SPLITS = 3; // Py-ART default; splitting the Nyquist interval finer separates folds better
+const EDGE_SKIP = 100;     // Py-ART default skip_along_ray/skip_between_rays: bridge gaps of up to this
+                           // many masked gates when finding region edges (see the edge loop below)
 
 // Wrapper: on any unexpected error, fall back to the raw (folded) radials rather than blanking the
 // whole velocity frame — same graceful degradation as "no Nyquist available".
@@ -376,19 +407,26 @@ function dealiasSweepCore(radials, radar) {
         e[0]++; e[1] += dv / nyq2;
         const f = e.mate; f[0]++; f[1] -= dv / nyq2;
     }
+    // ⚠️ GAP-SKIPPING (Py-ART skip_along_ray/skip_between_rays, default 100): when the next gate is
+    // masked, look PAST up to EDGE_SKIP masked gates to the next labelled region and connect to it. Without
+    // this, sparse FAR-RANGE regions (separated from the main body by data gaps) stay disconnected, get no
+    // edge, and after centering land on the wrong absolute fold — measured KLVX 2026-07-21: only 87%
+    // agreement with Py-ART (a uniform −1 fold beyond ~120 km), fixed to 100% by bridging the gaps. Dense
+    // data is unaffected: the scan finds the adjacent gate immediately (no skip), so directly-touching
+    // regions edge exactly as before (Moore-2013 couplet unchanged, core −135 mph).
     for (let r = 0; r < N; r++) {
         for (let j = 0; j < G; j++) {
             const la = label[idx(r, j)];
             if (la < 0) continue;
             const va = val(r, j);
-            const nb = [[r, j + 1], [(r + 1) % N, j]]; // right + down(+wrap): each boundary once
-            for (let k = 0; k < 2; k++) {
-                const rr = nb[k][0], jj = nb[k][1];
-                if (jj >= G) continue;
-                const lb = label[idx(rr, jj)];
-                if (lb < 0 || lb === la) continue;
-                addEdge(la, lb, va - val(rr, jj));
-            }
+            // Along the ray: next labelled gate to the right, skipping up to EDGE_SKIP masked gates.
+            let jj = j + 1, s = 0;
+            while (jj < G && label[idx(r, jj)] < 0 && s < EDGE_SKIP) { jj++; s++; }
+            if (jj < G) { const lb = label[idx(r, jj)]; if (lb >= 0 && lb !== la) addEdge(la, lb, va - val(r, jj)); }
+            // Across rays: next labelled gate downward (+wrap), skipping up to EDGE_SKIP masked rays.
+            let rr = (r + 1) % N; s = 0;
+            while (rr !== r && label[idx(rr, j)] < 0 && s < EDGE_SKIP) { rr = (rr + 1) % N; s++; }
+            if (rr !== r) { const lb = label[idx(rr, j)]; if (lb >= 0 && lb !== la) addEdge(la, lb, va - val(rr, j)); }
         }
     }
 
@@ -854,6 +892,7 @@ export function decodeAndBuild(ab, siteLat, siteLon, minDbz, buildLazy, buildGri
         // which one velocity came from. This is what surfaces a partial sweep (small az span) or a
         // missing/odd Doppler cut, so intermittent velocity glitches are visible in the log.
         let radials = 0, gates = 0, elevList = '', velElevNum = -1, velNyq = 0;
+        let velNyqSrc = '', velNyqRad = 0, velNyqVol = 0; // instrumentation: which Nyquist field was used
         let reflStats = null, velStats = null;
         try {
             const elevs = radar.listElevations();
@@ -870,8 +909,11 @@ export function decodeAndBuild(ab, siteLat, siteLon, minDbz, buildLazy, buildGri
                     radar.setElevation(ve);
                     const velArr = momentRadials(radar, 'velocity');
                     velStats = sweepStats(velArr, function (i) { return radar.getAzimuth(i); });
-                    const nyq = sweepNyquist(radar, velArr.length);
-                    velNyq = isFinite(nyq) ? Math.round(nyq * 10) / 10 : 0;
+                    const det = sweepNyquistDetail(radar, velArr.length);
+                    velNyq = isFinite(det.med) ? Math.round(det.med * 10) / 10 : 0;
+                    velNyqSrc = det.src; // 'rad' (correct) | 'vol' (fallback, suspect) | 'mixed' | 'none'
+                    velNyqRad = isFinite(det.radMed) ? Math.round(det.radMed * 10) / 10 : 0;
+                    velNyqVol = isFinite(det.volMed) ? Math.round(det.volMed * 10) / 10 : 0;
                 }
             }
         } catch (e) { /* stats only */ }
@@ -899,6 +941,7 @@ export function decodeAndBuild(ab, siteLat, siteLon, minDbz, buildLazy, buildGri
             decodeMs: Math.round(t1 - t0), buildMs: Math.round(t2 - t1),
             radials: radials, gates: gates, bytes: bytes,
             elevList: elevList, velElev: velElevNum, reflStats: reflStats, velStats: velStats, velNyq: velNyq,
+            velNyqSrc: velNyqSrc, velNyqRad: velNyqRad, velNyqVol: velNyqVol,
             dealias: moments.velocity ? _dealiasInfo : '',
         };
     });

@@ -22,6 +22,7 @@ Usage (TIME IS UTC):  python dealias_check.py SITE YYYY MM DD HH MM
 Examples:
     python dealias_check.py KTLX 2013 05 20 20 12    # Moore EF5 couplet  (Py-ART core ~ -135 mph)
     python dealias_check.py KTLX 1999 05 03 23 46    # Bridge Creek F5    (Py-ART core ~ -100 mph, legacy)
+    python dealias_check.py KLVX 2026 07 21 20 44    # far-range gap-skip regression (EDGE_SKIP): expect 100%
 
 Does NOT touch the C# app.
 """
@@ -93,6 +94,14 @@ def _find_regions(raw, nyq, splits=3):
     return label, cnt
 
 
+# EDGE_SKIP mirrors Py-ART's skip_along_ray/skip_between_rays (default 100): bridge gaps of up to this
+# many masked gates when connecting regions, so sparse FAR-RANGE regions join the main body instead of
+# floating free and landing on the wrong absolute fold after centering. Measured KLVX 2026-07-21:
+# skip=0 gave 87% agreement (uniform -1 fold beyond ~120 km); skip=100 gives 100%. Keep in sync with the
+# JS EDGE_SKIP in radar-decode.js.
+EDGE_SKIP = 100
+
+
 def _edges_of(label, raw, nyq2):
     N, G = raw.shape
     adj = {}
@@ -111,13 +120,18 @@ def _edges_of(label, raw, nyq2):
             if la < 0:
                 continue
             va = raw[r, j]
-            for rr, jj in ((r, j + 1), ((r + 1) % N, j)):
-                if jj >= G:
-                    continue
-                lb = label[rr, jj]
-                if lb < 0 or lb == la:
-                    continue
-                add(la, lb, va, raw[rr, jj])
+            # along ray: next labelled gate to the right, skipping up to EDGE_SKIP masked gates
+            jj, s = j + 1, 0
+            while jj < G and label[r, jj] < 0 and s < EDGE_SKIP:
+                jj += 1; s += 1
+            if jj < G and label[r, jj] >= 0 and label[r, jj] != la:
+                add(la, label[r, jj], va, raw[r, jj])
+            # across rays: next labelled gate downward (+wrap), skipping up to EDGE_SKIP masked rays
+            rr, s = (r + 1) % N, 0
+            while rr != r and label[rr, j] < 0 and s < EDGE_SKIP:
+                rr = (rr + 1) % N; s += 1
+            if rr != r and label[rr, j] >= 0 and label[rr, j] != la:
+                add(la, label[rr, j], va, raw[rr, j])
     return adj
 
 

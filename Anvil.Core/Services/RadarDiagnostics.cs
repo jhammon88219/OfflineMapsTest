@@ -282,9 +282,13 @@ namespace Anvil.Services
 
 				// The raw JS payload is nested under "js" so the JSONL keeps every metric losslessly.
 				// A "lvl" of warn marks suspect frames so the machine log is filterable by severity.
+				// nyqSrc surfaces the Nyquist decode source as a first-class field ('rad' correct, 'vol'
+				// the suspect fallback) so a couplet fold miss is greppable in the log; velNyq* detail rides
+				// along in the cloned "js" payload. See radar-decode.js sweepNyquistDetail.
 				WriteEnvelope("js", "frame",
 					("lvl", f.Suspect ? "warn" : null),
-					("idx", idx), ("suspect", f.Suspect ? f.SuspectReason : null), ("js", (object)msg.Clone()));
+					("idx", idx), ("nyqSrc", GetStr(msg, "velNyqSrc")),
+					("suspect", f.Suspect ? f.SuspectReason : null), ("js", (object)msg.Clone()));
 
 				if (f.Suspect)
 				{

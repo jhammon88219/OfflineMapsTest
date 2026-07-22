@@ -347,6 +347,7 @@
             tris: reflCount, velTris: velCount,
             decodeMs: res.decodeMs, buildMs: res.buildMs, bytes: res.bytes,
             elevList: res.elevList, velElev: res.velElev, velNyq: res.velNyq,
+            velNyqSrc: res.velNyqSrc, velNyqRad: res.velNyqRad, velNyqVol: res.velNyqVol,
             reflStats: res.reflStats, velStats: res.velStats, dealias: res.dealias,
             decoded: frames.filter(Boolean).length, total: frames.length, cf: currentFrame,
         });
