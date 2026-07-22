@@ -228,7 +228,7 @@ namespace Anvil.ViewModels
 			}
 
 			var day = SelectedDay;
-			var date = ConvectiveDay(ReplayStartUtc());
+			var date = ConvectiveDay(_radar.ReplayStartUtc());
 			StatusText = "Loading outlook…";
 
 			var (result, cycleUsed) = await EnsureWithFallbackAsync(date, day);
@@ -283,7 +283,7 @@ namespace Anvil.ViewModels
 			}
 
 			PastOutlookResult? last = null;
-			var order = OrderedAutoCycles(day, ReplayStartUtc());
+			var order = OrderedAutoCycles(day, _radar.ReplayStartUtc());
 			foreach (var c in order)
 			{
 				var r = await _outlookService.EnsurePastOutlookAsync(date, day, c);
@@ -294,18 +294,6 @@ namespace Anvil.ViewModels
 		}
 
 		// ── Replay-date + issuance-cycle resolution ──
-
-		// Reconstructs the replay window's UTC start from the RadarViewModel date/time controls (mirrors
-		// RadarViewModel's own composition: local midnight + start time-of-day, then to UTC).
-		private DateTimeOffset ReplayStartUtc()
-		{
-			var year = _radar.PastEventYearOptions[_radar.PastEventYearIndex];
-			var month = _radar.PastEventMonthIndex + 1;
-			var day = Math.Min(_radar.PastEventDayIndex + 1, DateTime.DaysInMonth(year, month));
-			var localMidnight = new DateTimeOffset(year, month, day, 0, 0, 0,
-				TimeZoneInfo.Local.GetUtcOffset(new DateTime(year, month, day)));
-			return (localMidnight + _radar.PastEventTime).ToUniversalTime();
-		}
 
 		// The SPC "convective day" (12Z→12Z) containing the replay start = the IEM `valid` date.
 		private static DateOnly ConvectiveDay(DateTimeOffset startUtc)

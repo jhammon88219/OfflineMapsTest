@@ -51,6 +51,17 @@ namespace Anvil.Services
 		public Task SetWarningsOpacityAsync(double opacity) =>
 			_mapView.RunScriptAsync(Call("setWarningsOpacity", opacity));
 
+		// SPC storm reports (Tornado / Wind / Hail verification dots): point the page at the cached GeoJSON,
+		// toggle which types show, and set the overall opacity.
+		public Task SetStormReportsSourceAsync(string url) =>
+			_mapView.RunScriptAsync(Call("setStormReportsSource", url));
+
+		public Task SetStormReportKindsAsync(bool tornado, bool wind, bool hail) =>
+			_mapView.RunScriptAsync(Call("setStormReportKinds", tornado, wind, hail));
+
+		public Task SetStormReportsOpacityAsync(double opacity) =>
+			_mapView.RunScriptAsync(Call("setStormReportsOpacity", opacity));
+
 		// The loop is driven frame-by-frame: begin (with the site's antenna coords, needed to
 		// project the gates), then add each cached volume URL as a frame, then show by index.
 		public Task BeginRadarLoopAsync(RadarSite site) =>

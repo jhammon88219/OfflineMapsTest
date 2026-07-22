@@ -105,6 +105,19 @@ namespace Anvil.Services
 		/// </summary>
 		Task SetWarningsOpacityAsync(double opacity);
 
+		/// <summary>
+		/// Tells the page where to load the cached storm-report GeoJSON (Tornado / Wind / Hail points) from.
+		/// The page fetches it with no-store (today's file grows through the day) and re-renders.
+		/// </summary>
+		Task SetStormReportsSourceAsync(string url);
+
+		/// <summary>Shows the storm-report dots by type — each flag toggles that type's layer independently
+		/// (all false hides the overlay without tearing down the source).</summary>
+		Task SetStormReportKindsAsync(bool tornado, bool wind, bool hail);
+
+		/// <summary>Sets the overall opacity (0-1) of the storm-report dots.</summary>
+		Task SetStormReportsOpacityAsync(double opacity);
+
 		/// <summary>Highlights the selected site marker (empty clears the highlight).</summary>
 		Task SetSelectedRadarSiteAsync(string? siteId);
 

@@ -36,7 +36,7 @@ namespace Anvil.ViewModels
 		private MapRegion? _mainRegion;
 
 
-		public MapViewModel(IMapService mapService, IStyleProvider styleProvider, IRegionProvider regionProvider, ISpcOutlookService spcOutlookService, ISpcWatchService watchService, IWarningService warningService, IRadarSiteProvider radarSiteProvider, ILevel2RadarService radarService, ILocationService locationService, IDowEventProvider dowEventProvider, IDispatcher dispatcher)
+		public MapViewModel(IMapService mapService, IStyleProvider styleProvider, IRegionProvider regionProvider, ISpcOutlookService spcOutlookService, ISpcWatchService watchService, IWarningService warningService, IStormReportService stormReportService, IRadarSiteProvider radarSiteProvider, ILevel2RadarService radarService, ILocationService locationService, IDowEventProvider dowEventProvider, IDispatcher dispatcher)
 		{
 			_mapService = mapService;
 			_styleProvider = styleProvider;
@@ -49,6 +49,7 @@ namespace Anvil.ViewModels
 			PastOutlook = new PastOutlookViewModel(mapService, spcOutlookService, Radar);
 			Watches = new WatchesViewModel(mapService, watchService, dispatcher);
 			Warnings = new WarningsViewModel(mapService, warningService, dispatcher);
+			StormReports = new StormReportsViewModel(mapService, stormReportService, Radar, dispatcher);
 			Markers = new MarkersViewModel(mapService, locationService);
 			SiteExplorer = new RadarSiteExplorerViewModel(Radar, Markers, radarService, mapService);
 
@@ -125,6 +126,11 @@ namespace Anvil.ViewModels
 		/// Warnings — the modern forecaster-drawn polygons — surfaced under NowCast with their own toggle
 		/// + faster refresh loop; sits above the watch boxes on the map).</summary>
 		public WarningsViewModel Warnings { get; }
+
+		/// <summary>The SPC storm-reports verification overlay VM (Tornado / Wind / Hail dots for the active
+		/// convective day — the replay day in PastCast, today in NowCast — with per-type toggles). Its own
+		/// map overlay (top of the stack); surfaced in both the Past and Now cards.</summary>
+		public StormReportsViewModel StormReports { get; }
 
 		/// <summary>The map markers + user-location subsystem view model (locate action + marker editor).</summary>
 		public MarkersViewModel Markers { get; }
@@ -340,6 +346,7 @@ namespace Anvil.ViewModels
 			await Warnings.OnMapsReadyAsync();
 			await Radar.OnMapsReadyAsync();
 			await PastOutlook.OnMapsReadyAsync();
+			await StormReports.OnMapsReadyAsync();
 		}
 	}
 }

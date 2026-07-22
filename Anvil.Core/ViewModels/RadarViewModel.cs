@@ -371,6 +371,21 @@ namespace Anvil.ViewModels
 			set => SetProperty(ref _pastEventTime, value);
 		}
 
+		/// <summary>The replay window's UTC start, reconstructed from the Year/Month/Day/time controls
+		/// (local midnight for the selected date + the start time-of-day, then to UTC; the day is clamped to
+		/// the month's length). This VM owns the replay-date state, so overlays keyed to the replay date (the
+		/// historical outlook, storm reports) read the instant from here rather than each re-deriving it.
+		/// <see cref="LoadSelectedPastEventAsync"/> keeps its own inline copy because it also needs the end.</summary>
+		internal DateTimeOffset ReplayStartUtc()
+		{
+			var year = PastEventYearOptions[_pastEventYearIndex];
+			var month = _pastEventMonthIndex + 1;
+			var day = Math.Min(_pastEventDayIndex + 1, DateTime.DaysInMonth(year, month));
+			var localMidnight = new DateTimeOffset(year, month, day, 0, 0, 0,
+				TimeZoneInfo.Local.GetUtcOffset(new DateTime(year, month, day)));
+			return (localMidnight + _pastEventTime).ToUniversalTime();
+		}
+
 		/// <summary>Selected window-duration index (into <see cref="PastEventDurationOptions"/>).</summary>
 		public int PastEventDurationIndex
 		{

@@ -21,7 +21,7 @@
              stacked. The card is taller (CardHeight) to hold both — the outlook is an independent overlay
              on the replay radar, mirroring live mode. -->
         <ctl:ControlCard Title="Past Event"
-                         CardHeight="470"
+                         CardHeight="610"
                          CloseRequested="OnCardCloseRequested"
                          Visibility="{x:Bind VisibleWhen(ViewModel.IsPastCardOpen), Mode=OneWay}">
             <ctl:ControlCard.CardBody>
@@ -30,11 +30,16 @@
                         <RowDefinition Height="Auto"/> <!-- radar: date / start / window -->
                         <RowDefinition Height="Auto"/> <!-- divider -->
                         <RowDefinition Height="Auto"/> <!-- historical SPC outlook -->
+                        <RowDefinition Height="Auto"/> <!-- divider -->
+                        <RowDefinition Height="Auto"/> <!-- storm reports (verification) -->
                     </Grid.RowDefinitions>
                     <sections:PastEventInput Grid.Row="0" ViewModel="{x:Bind ViewModel.Radar, Mode=OneWay}"/>
                     <Border Grid.Row="1" Height="1" Margin="0,2"
                             Background="{ThemeResource CardStrokeColorDefaultSolidBrush}"/>
                     <sections:PastOutlookInput Grid.Row="2" ViewModel="{x:Bind ViewModel.PastOutlook, Mode=OneWay}"/>
+                    <Border Grid.Row="3" Height="1" Margin="0,2"
+                            Background="{ThemeResource CardStrokeColorDefaultSolidBrush}"/>
+                    <sections:StormReportsInput Grid.Row="4" ViewModel="{x:Bind ViewModel.StormReports, Mode=OneWay}"/>
                 </Grid>
             </ctl:ControlCard.CardBody>
         </ctl:ControlCard>
@@ -42,11 +47,21 @@
         <!-- Now: live radar. Hosts the "now"-oriented options (SPC watch boxes + storm-based warnings).
              Taller than the default to fit both the watches and warnings rows. -->
         <ctl:ControlCard Title="Live Radar"
-                         CardHeight="352"
+                         CardHeight="500"
                          CloseRequested="OnCardCloseRequested"
                          Visibility="{x:Bind VisibleWhen(ViewModel.IsNowCardOpen), Mode=OneWay}">
             <ctl:ControlCard.CardBody>
-                <sections:NowCastInput ViewModel="{x:Bind ViewModel, Mode=OneWay}"/>
+                <Grid RowSpacing="12">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/> <!-- watches + warnings -->
+                        <RowDefinition Height="Auto"/> <!-- divider -->
+                        <RowDefinition Height="Auto"/> <!-- storm reports (today) -->
+                    </Grid.RowDefinitions>
+                    <sections:NowCastInput Grid.Row="0" ViewModel="{x:Bind ViewModel, Mode=OneWay}"/>
+                    <Border Grid.Row="1" Height="1" Margin="0,2"
+                            Background="{ThemeResource CardStrokeColorDefaultSolidBrush}"/>
+                    <sections:StormReportsInput Grid.Row="2" ViewModel="{x:Bind ViewModel.StormReports, Mode=OneWay}"/>
+                </Grid>
             </ctl:ControlCard.CardBody>
         </ctl:ControlCard>
 

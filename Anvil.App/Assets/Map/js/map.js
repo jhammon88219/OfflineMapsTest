@@ -43,6 +43,7 @@ try {
             if (Outlook) Outlook.reAdd(map); // re-add the outlook (reuse clipped data, or re-fetch)
             if (Watches) Watches.reAdd(map); // re-add the watch layers (data is still in memory)
             if (Warnings) Warnings.reAdd(map); // re-add the warning polygons (above the watches)
+            if (StormReports) StormReports.reAdd(map); // re-add the storm-report dots (top of the stack)
             if (window.RadarLayer) window.RadarLayer.reAdd(map);
         });
     };
@@ -69,6 +70,14 @@ try {
     window.setWarningSource = function (url) { if (Warnings) Warnings.setSource(map, url); };
     window.setWarningsVisible = function (on) { if (Warnings) Warnings.setVisible(map, on); };
     window.setWarningsOpacity = function (o) { if (Warnings) Warnings.setOpacity(map, o); };
+
+    // SPC storm-report dots (Tornado / Wind / Hail verification) live in storm-reports.js — same lazy-load/
+    // delegate pattern. They sit on TOP of the stack. applyStyle calls StormReports.reAdd(map).
+    var StormReports = null;
+    import('./storm-reports.js').then(function (m) { StormReports = m; }).catch(function (e) { console.error('storm-reports.js load failed: ' + e); });
+    window.setStormReportsSource = function (url) { if (StormReports) StormReports.setSource(map, url); };
+    window.setStormReportKinds = function (torn, wind, hail) { if (StormReports) StormReports.setKinds(map, torn, wind, hail); };
+    window.setStormReportsOpacity = function (o) { if (StormReports) StormReports.setOpacity(map, o); };
 
     window.flyTo = function (lng, lat, zoom) { map.flyTo({ center: [lng, lat], zoom: zoom }); };
 
